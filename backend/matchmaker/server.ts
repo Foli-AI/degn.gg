@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
@@ -1027,7 +1027,7 @@ io.on('connection', (socket) => {
 });
 
 // REST API endpoints
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -1039,7 +1039,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.get('/lobbies', (req, res) => {
+app.get('/lobbies', (req: Request, res: Response) => {
   const lobbyList = Array.from(lobbies.values()).map(lobby => ({
     id: lobby.id,
     gameType: lobby.gameType,
@@ -1061,7 +1061,7 @@ app.get('/lobbies', (req, res) => {
   });
 });
 
-app.post('/create-lobby', (req, res) => {
+app.post('/create-lobby', (req: Request, res: Response) => {
     const { gameType, maxPlayers, entryAmount } = req.body;
   
     // ✅ Default allowed games (you can add more)
@@ -1134,7 +1134,7 @@ app.post('/create-lobby', (req, res) => {
   });
   
 
-app.get('/stats', (req, res) => {
+app.get('/stats', (req: Request, res: Response) => {
   const lobbyStats = Array.from(lobbies.values()).map(lobby => ({
     id: lobby.id,
     gameType: lobby.gameType,
@@ -1152,7 +1152,7 @@ app.get('/stats', (req, res) => {
 });
 
 // Solana payment endpoints
-app.post('/api/pay-entry', async (req, res) => {
+app.post('/api/pay-entry', async (req: Request, res: Response) => {
   try {
     const { lobbyId, playerAddress } = req.body;
 
@@ -1210,7 +1210,7 @@ app.post('/api/pay-entry', async (req, res) => {
   }
 });
 
-app.post('/api/verify-entry', async (req, res) => {
+app.post('/api/verify-entry', async (req: Request, res: Response) => {
   try {
     const { lobbyId, signature, playerAddress } = req.body;
 
@@ -1264,7 +1264,7 @@ app.post('/api/verify-entry', async (req, res) => {
 });
 
 // Start match endpoint (called by frontend after payments confirmed)
-app.post('/start-match', async (req, res) => {
+app.post('/start-match', async (req: Request, res: Response) => {
   try {
     const { lobbyId, players } = req.body;
 
