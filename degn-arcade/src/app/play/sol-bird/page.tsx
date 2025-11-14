@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+
+export const dynamic = 'force-dynamic';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Users, Trophy, Clock } from 'lucide-react';
 import { useMatchmaker } from '@/hooks/useMatchmaker';
 import GameEmbed from '@/components/GameEmbed';
 import { socket } from '@/lib/socket';
 
-export default function SolBirdGamePage() {
+function SolBirdGamePageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { connected, publicKey, playerId, currentLobby } = useMatchmaker();
@@ -342,5 +344,20 @@ export default function SolBirdGamePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SolBirdGamePage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-purple-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-white text-lg">Loading game...</p>
+        </div>
+      </div>
+    }>
+      <SolBirdGamePageContent />
+    </Suspense>
   );
 }

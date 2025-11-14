@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getAdminClient } from "@/lib/supabase/admin";
 import { validateServerEnv } from "@/lib/env";
 
+export const dynamic = 'force-dynamic';
+
 type ProfileEnsureRequest = {
   walletAddress: string;
 };

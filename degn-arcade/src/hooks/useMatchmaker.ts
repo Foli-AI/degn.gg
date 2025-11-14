@@ -68,7 +68,7 @@ interface UseMatchmakerState {
   playerId: string | null;
   lobbies: LobbyListItem[];
   currentLobby: Lobby | null;
-  status: 'disconnected' | 'connecting' | 'connected' | 'in-lobby' | 'in-game';
+  status: 'disconnected' | 'connecting' | 'connected' | 'in-lobby' | 'ready' | 'in-game';
   error: string | null;
   isLoading: boolean;
 }

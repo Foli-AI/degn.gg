@@ -2,7 +2,17 @@ import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/server";
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
+  // Ensure this only runs at request time, not build time
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return NextResponse.json(
+      { error: "ENV_MISSING: SUPABASE_SERVICE_ROLE_KEY" },
+      { status: 500 }
+    );
+  }
+  
   const supabase = createAdminClient();
   const { data: round } = await supabase
     .from("crash_rounds")

@@ -3,6 +3,8 @@ import { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } f
 import { getAdminClient } from '@/lib/supabase/admin';
 import { validateServerEnv, SAFE_ENV } from '@/lib/env';
 
+export const dynamic = 'force-dynamic';
+
 // Solana connection
 const connection = new Connection(
   process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.devnet.solana.com',
