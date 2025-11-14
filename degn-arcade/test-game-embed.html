@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GameEmbed Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+        }
+        .test-container {
+            width: 800px;
+            height: 600px;
+            border: 2px solid #8b5cf6;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        button {
+            background: #8b5cf6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #7c3aed;
+        }
+        .log {
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>GameEmbed Component Test</h1>
+    <p>This tests the safe mounting/unmounting of game iframes to prevent removeChild errors.</p>
+    
+    <div>
+        <button onclick="mountGame()">Mount Game</button>
+        <button onclick="unmountGame()">Unmount Game</button>
+        <button onclick="remountGame()">Remount Game</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+    
+    <div class="test-container" id="gameContainer"></div>
+    
+    <div class="log" id="logContainer"></div>
+
+    <script>
+        let currentIframe = null;
+        
+        function log(message) {
+            const logContainer = document.getElementById('logContainer');
+            const timestamp = new Date().toLocaleTimeString();
+            logContainer.innerHTML += `[${timestamp}] ${message}\n`;
+            logContainer.scrollTop = logContainer.scrollHeight;
+            console.log(message);
+        }
+        
+        function clearLogs() {
+            document.getElementById('logContainer').innerHTML = '';
+        }
+        
+        function mountGame() {
+            const container = document.getElementById('gameContainer');
+            
+            log('Mounting game iframe...');
+            
+            // Safe clear - similar to GameEmbed component
+            while (container.firstChild) {
+                try {
+                    container.removeChild(container.firstChild);
+                    log('Removed existing child safely');
+                } catch (err) {
+                    log('removeChild failed, trying remove(): ' + err.message);
+                    try {
+                        container.firstChild.remove?.();
+                        log('Used remove() successfully');
+                    } catch (e) {
+                        log('Both removeChild and remove failed: ' + e.message);
+                        break;
+                    }
+                }
+            }
+            
+            // Create new iframe
+            const iframe = document.createElement('iframe');
+            currentIframe = iframe;
+            iframe.src = '/games/sol-bird/client/index.html?lobbyId=test123&players=2&entry=0.01';
+            iframe.width = '100%';
+            iframe.height = '100%';
+            iframe.style.border = '0';
+            iframe.style.borderRadius = '10px';
+            
+            container.appendChild(iframe);
+            log('Game iframe mounted successfully');
+        }
+        
+        function unmountGame() {
+            const container = document.getElementById('gameContainer');
+            
+            log('Unmounting game iframe...');
+            
+            if (currentIframe && currentIframe.parentNode === container) {
+                try {
+                    container.removeChild(currentIframe);
+                    log('Iframe removed successfully with removeChild');
+                } catch (err) {
+                    log('removeChild failed: ' + err.message);
+                    try {
+                        currentIframe.remove?.();
+                        log('Used remove() as fallback');
+                    } catch (e) {
+                        log('Both methods failed: ' + e.message);
+                    }
+                }
+            } else {
+                log('No iframe to remove or parent mismatch');
+            }
+            
+            currentIframe = null;
+        }
+        
+        function remountGame() {
+            log('=== REMOUNT TEST ===');
+            unmountGame();
+            setTimeout(() => {
+                mountGame();
+            }, 100);
+        }
+        
+        // Initial log
+        log('GameEmbed test page loaded. Click buttons to test safe mounting/unmounting.');
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# Render ignore file for matchmaker
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.DS_Store
+*.tsbuildinfo
+

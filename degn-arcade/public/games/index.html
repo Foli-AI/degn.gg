@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sol Bird - Multiplayer Flappy Bird</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e293b, #7c3aed, #1e293b);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #8b5cf6;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+        }
+        
+        #multiplayerUI {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #8b5cf6;
+            color: white;
+            font-size: 14px;
+            min-width: 200px;
+        }
+        
+        #playersList {
+            margin-top: 10px;
+        }
+        
+        .player-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            padding: 5px;
+            background: rgba(139, 92, 246, 0.2);
+            border-radius: 5px;
+        }
+        
+        .player-alive {
+            color: #10b981;
+        }
+        
+        .player-dead {
+            color: #ef4444;
+            text-decoration: line-through;
+        }
+        
+        #gameStatus {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            border: 2px solid #8b5cf6;
+            color: white;
+            text-align: center;
+            font-size: 18px;
+            display: none;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 10px;
+            color: white;
+            font-size: 12px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        
+        <div id="multiplayerUI">
+            <div><strong>Sol Bird Multiplayer</strong></div>
+            <div>Lobby: <span id="lobbyId">Loading...</span></div>
+            <div>Status: <span id="connectionStatus">Connecting...</span></div>
+            <div id="playersList"></div>
+        </div>
+        
+        <div id="gameStatus">
+            <h2 id="statusTitle">Game Over</h2>
+            <p id="statusMessage">Waiting for results...</p>
+            <button id="playAgainBtn" onclick="location.reload()">Play Again</button>
+        </div>
+        
+        <div id="instructions">
+            Press SPACE or click to flap • Survive the longest to win!
+        </div>
+    </div>
+
+    <!-- Load the original CrappyBird game -->
+    <script src="../core/js/resources.js"></script>
+    <script src="../core/js/input.js"></script>
+    <script src="../core/js/bird.js"></script>
+    <script src="../core/js/pipe.js"></script>
+    <script src="../core/js/game.js"></script>
+    
+    <!-- Socket.IO for multiplayer -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    
+    <!-- Multiplayer wrapper -->
+    <script src="multiplayerWrapper.js"></script>
+</body>
+</html>

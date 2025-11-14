@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sol Bird - Multiplayer Flappy Bird</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e293b, #7c3aed, #1e293b);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #multiplayerUI {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #8b5cf6;
+            color: white;
+            font-size: 14px;
+            min-width: 200px;
+            z-index: 1000;
+        }
+        
+        /* Canvas styles for the game */
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background: #fff;
+            border: 2px solid #8b5cf6;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+        }
+        
+        audio {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="multiplayerUI">
+            <div><strong>Sol Bird Multiplayer</strong></div>
+            <div>Lobby: <span id="lobbyId">Loading...</span></div>
+            <div>Status: <span id="connectionStatus">Initializing...</span></div>
+        </div>
+    </div>
+
+    <!-- Initialize multiplayer parameters -->
+    <script>
+        console.log('[SolBird] Sol Bird main.js loaded!');
+        console.log('[SolBird] Initializing multiplayer parameters...');
+        
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const lobbyId = urlParams.get('lobbyId') || urlParams.get('lobby') || 'test';
+        const players = parseInt(urlParams.get('players')) || 2;
+        const entry = parseFloat(urlParams.get('entry')) || 0;
+        const playerId = urlParams.get('playerId') || `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const wsUrl = urlParams.get('wsUrl') || 'ws://localhost:3001';
+        
+        // Convert ws:// to http:// for Socket.IO
+        const socketUrl = wsUrl.replace('ws://', 'http://').replace('wss://', 'https://');
+        
+        // Update UI
+        document.getElementById('lobbyId').textContent = lobbyId;
+        document.getElementById('connectionStatus').textContent = 'Connecting...';
+        
+        console.log('[SolBird] Lobby:', lobbyId, 'PlayerId:', playerId, 'Players:', players, 'Entry:', entry, 'SocketURL:', socketUrl);
+        
+        // Store config for multiplayer wrapper
+        window.MULTIPLAYER_CONFIG = {
+            lobbyId: lobbyId,
+            players: players,
+            entry: entry,
+            playerId: playerId,
+            socketUrl: socketUrl
+        };
+        
+        // Deterministic random number generator (Mulberry32)
+        // Seed based on lobbyId hash
+        function hashString(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32bit integer
+            }
+            return Math.abs(hash);
+        }
+        
+        function mulberry32(seed) {
+            return function() {
+                let t = seed += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            };
+        }
+        
+        // Create seeded random generator for this lobby
+        const seed = hashString(lobbyId);
+        window.LOBBY_RANDOM = mulberry32(seed);
+        console.log('[SolBird] Deterministic seed initialized:', seed, 'for lobby:', lobbyId);
+    </script>
+
+    <!-- Complete CrappyBird Game Engine -->
+    <script>
+        console.log('[SolBird] Loading CrappyBird game engine...');
+        
+        // Animation frame polyfill
+        window.requestAnimFrame = (function () {
+            return window.requestAnimationFrame ||
+                window.webkitRequestAnimationFrame ||
+                window.mozRequestAnimationFrame ||
+                window.oRequestAnimationFrame ||
+                window.msRequestAnimationFrame ||
+                function (callback) {
+                    window.setTimeout(callback, 1000 / 60);
+            };
+        })();
+        
+        // Sound system with absolute paths
+        var soundJump = new Audio("/games/sol-bird/client/wing.ogg");
+        var soundScore = new Audio("/games/sol-bird/client/point.ogg");
+        var soundHit = new Audio("/games/sol-bird/client/hit.ogg");
+        var soundDie = new Audio("/games/sol-bird/client/die.ogg");
+        var soundSwoosh = new Audio("/games/sol-bird/client/swooshing.ogg");
+        
+        var channel_max = 10;
+        audiochannels = new Array();
+        for (a = 0; a < channel_max; a++) {
+            audiochannels[a] = new Array();
+            audiochannels[a]['channel'] = new Audio();
+            audiochannels[a]['finished'] = -1;
+        }
+
+        function play_sound(s) {
+            for (a = 0; a < audiochannels.length; a++) {
+                thistime = new Date();
+                if (audiochannels[a]['finished'] < thistime.getTime()) {
+                    audiochannels[a]['finished'] = thistime.getTime() + s.duration * 1000;
+                    audiochannels[a]['channel'].src = s.src;
+                    audiochannels[a]['channel'].load();
+                    audiochannels[a]['channel'].play();
+                    break;
+                }
+            }
+        }
+        
+        function getCookie(cname) {
+           var name = cname + "=";
+           var ca = document.cookie.split(';');
+           for(var i=0; i<ca.length; i++) {
+              var c = ca[i].trim();
+              if (c.indexOf(name)==0) return c.substring(name.length,c.length);
+           }
+           return "";
+        }
+
+        function setCookie(cname,cvalue,exdays) {
+           var d = new Date();
+           d.setTime(d.getTime()+(exdays*24*60*60*1000));
+           var expires = "expires="+d.toGMTString();
+           document.cookie = cname + "=" + cvalue + "; " + expires;
+        }
+
+        // Game namespace
+        var FB = {
+            WIDTH: 320,
+            HEIGHT: 480,
+            scale: 1,
+            offset: { top: 0, left: 0 },
+            entities: [],
+            currentWidth: null,
+            currentHeight: null,
+            canvas: null,
+            ctx: null,
+            score: { taps: 0, coins: 0 },
+            distance: 0,
+            digits:[],
+            fonts:[],
+            RATIO: null,
+            bg_grad: "day",
+            game:null,
+            ua: null,
+            android: null,
+            ios: null,
+            gradients: {},
+            
+            init: function () {
+                console.log('[SolBird] FB.init() called - initializing game');
+                
+                var grad;
+                FB.RATIO = FB.WIDTH / FB.HEIGHT;
+                FB.currentWidth = FB.WIDTH;
+                FB.currentHeight = FB.HEIGHT;
+                
+                // Create canvas
+                FB.canvas = document.createElement('canvas');
+                FB.canvas.width = FB.WIDTH;
+                FB.canvas.height = FB.HEIGHT;
+                
+                // Add canvas to container
+                const gameContainer = document.getElementById('gameContainer');
+                gameContainer.appendChild(FB.canvas);
+                
+                FB.ctx = FB.canvas.getContext('2d');
+                
+                FB.ua = navigator.userAgent.toLowerCase();
+                FB.android = FB.ua.indexOf('android') > -1 ? true : false;
+                FB.ios = (FB.ua.indexOf('iphone') > -1 || FB.ua.indexOf('ipad') > -1) ? true : false;
+
+                // Setup gradients
+                grad = FB.ctx.createLinearGradient(0, 0, 0, FB.HEIGHT);
+                grad.addColorStop(0, '#036');
+                grad.addColorStop(0.5, '#69a');
+                grad.addColorStop(1, 'yellow');
+                FB.gradients.dawn = grad;
+
+                grad = FB.ctx.createLinearGradient(0, 0, 0, FB.HEIGHT);
+                grad.addColorStop(0, '#69a');
+                grad.addColorStop(0.5, '#9cd');
+                grad.addColorStop(1, '#fff');
+                FB.gradients.day = grad;
+
+                grad = FB.ctx.createLinearGradient(0, 0, 0, FB.HEIGHT);
+                grad.addColorStop(0, '#036');
+                grad.addColorStop(0.3, '#69a');
+                grad.addColorStop(1, 'pink');
+                FB.gradients.dusk = grad;
+
+                grad = FB.ctx.createLinearGradient(0, 0, 0, FB.HEIGHT);
+                grad.addColorStop(0, '#036');
+                grad.addColorStop(1, 'black');
+                FB.gradients.night = grad;
+
+                // Event listeners
+                window.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    FB.Input.set(e);
+                }, false);
+
+                window.addEventListener('touchstart', function (e) {
+                    e.preventDefault();
+                    FB.Input.set(e.touches[0]);
+                }, false);
+                window.addEventListener('touchmove', function (e) {
+                    e.preventDefault();
+                }, false);
+                window.addEventListener('touchend', function (e) {
+                    e.preventDefault();
+                }, false);
+
+                FB.resize();
+                FB.changeState("Splash");
+                
+                console.log('[SolBird] Starting game loop...');
+                FB.loop();
+                
+                // Update multiplayer UI
+                document.getElementById('connectionStatus').textContent = 'Game Ready';
+            },
+
+            resize: function () {
+                FB.currentHeight = window.innerHeight;
+                FB.currentWidth = FB.currentHeight * FB.RATIO;
+
+                if (FB.android || FB.ios) {
+                    document.body.style.height = (window.innerHeight + 50) + 'px';
+                }
+
+                FB.canvas.style.width = FB.currentWidth + 'px';
+                FB.canvas.style.height = FB.currentHeight + 'px';
+
+                FB.scale = FB.currentWidth / FB.WIDTH;
+                FB.offset.top = FB.canvas.offsetTop;
+                FB.offset.left = FB.canvas.offsetLeft;
+
+                window.setTimeout(function () {
+                    window.scrollTo(0, 1);
+                }, 1);
+            },
+                        
+            update: function () {
+                FB.game.update();
+                FB.Input.tapped = false;
+            },
+
+            render: function () {
+                FB.Draw.rect(0, 0, FB.WIDTH, FB.HEIGHT, FB.gradients[FB.bg_grad]);
+                 
+                for (i = 0; i < FB.entities.length; i += 1) {
+                    FB.entities[i].render();
+                }
+                    
+                FB.game.render();
+            },
+
+            loop: function () {
+                requestAnimFrame(FB.loop);
+                FB.update();
+                FB.render();
+            },
+            
+            changeState: function(state) {                     
+                console.log('[SolBird] Changing state to:', state);
+                FB.game = new window[state]();
+                FB.game.init();
+            }
+        };
+
+        // Drawing functions
+        FB.Draw = {
+            clear: function () {
+                FB.ctx.clearRect(0, 0, FB.WIDTH, FB.HEIGHT);
+            },
+
+            rect: function (x, y, w, h, col) {
+                FB.ctx.fillStyle = col;
+                FB.ctx.fillRect(x, y, w, h);
+            },
+            
+            circle: function (x, y, r, col) {
+                FB.ctx.fillStyle = col;
+                FB.ctx.beginPath();
+                FB.ctx.arc(x + 5, y + 5, r, 0, Math.PI * 2, true);
+                FB.ctx.closePath();
+                FB.ctx.fill();
+            },
+            
+            Image:function(img,x,y){                
+                FB.ctx.drawImage(img,x,y);
+            },
+            
+            Sprite: function (img, srcX, srcY, srcW, srcH, destX, destY, destW, destH, r) {
+                FB.ctx.save();
+                FB.ctx.translate(destX, destY);
+                FB.ctx.rotate(r * (Math.PI / 180));
+                FB.ctx.translate(-(destX + destW / 2), -(destY + destH / 2));
+                FB.ctx.drawImage(img, srcX, srcY, srcW, srcH, destX, destY, destW, destH);
+                FB.ctx.restore();
+            },
+            
+            semiCircle: function (x, y, r, col) {
+                FB.ctx.fillStyle = col;
+                FB.ctx.beginPath();
+                FB.ctx.arc(x, y, r, 0, Math.PI, false);
+                FB.ctx.closePath();
+                FB.ctx.fill();
+            },
+
+            text: function (string, x, y, size, col) {
+                FB.ctx.font = 'bold ' + size + 'px Monospace';
+                FB.ctx.fillStyle = col;
+                FB.ctx.fillText(string, x, y);
+            }
+        };
+
+        FB.Input = {
+            x: 0,
+            y: 0,
+            tapped: false,
+
+            set: function (data) {
+                this.x = (data.pageX - FB.offset.left) / FB.scale;
+                this.y = (data.pageY - FB.offset.top) / FB.scale;
+                this.tapped = true;
+            }
+        };
+
+        // Game entities
+        FB.Cloud = function (x, y) {
+            this.x = x;
+            this.y = y;
+            this.r = 30;
+            this.col = 'rgba(255,255,255,1)';
+            this.type = 'cloud';
+            this.vx = -0.10;
+            this.remove = false;
+
+            this.update = function () {
+                this.x += this.vx;
+                if (this.x < (0 - 115)) {
+                    this.respawn();
+                }
+            };
+
+            this.render = function () {
+                FB.Draw.circle(this.x + this.r, (this.y + this.r), this.r, this.col);
+                FB.Draw.circle(this.x + 55, (this.y + this.r / 2), this.r / 0.88, this.col);
+                FB.Draw.circle(this.x + 55, (this.y + this.r + 15), this.r, this.col);
+                FB.Draw.circle(this.x + 85, (this.y + this.r), this.r, this.col);
+            };
+
+            this.respawn = function () {
+                this.x = ~~ (Math.random() * this.r * 2) + FB.WIDTH;
+                this.y = ~~ (Math.random() * FB.HEIGHT / 2)
+            };
+        };
+
+        FB.BottomBar = function (x, y, r) {
+            this.x = x;
+            this.y = y
+            this.r = r;
+            this.vx = -1;
+            this.name = 'BottomBar';
+
+            this.update = function () {
+                this.x += this.vx;
+                if (this.x < (0 - this.r)) {
+                    this.respawn();
+                }
+            };
+
+            this.render = function () {
+                FB.Draw.rect(this.x, this.y, this.r, 100, '#D2691E');
+                for (var i = 0; i < 10; i++) {
+                    FB.Draw.semiCircle(this.x + i * (this.r / 9), this.y, 20, '#050');
+                }
+            }
+
+            this.respawn = function () {
+                this.x = FB.WIDTH - 1;
+            }
+        }
+
+        FB.Tree = function (x, y) {
+            this.x = x;
+            this.y = y
+            this.r = 30;
+            this.h = 50;
+            this.w = this.r * 2;
+            this.vx = -1;
+            this.type = 'Tree';
+
+            this.update = function () {
+                this.x += this.vx;
+                if (this.x < (0 - this.r * 2)) {
+                    this.respawn();
+                }
+            };
+
+            this.render = function () {
+                FB.Draw.circle(this.x + this.r, (this.y + this.r) - 10, this.r, 'green', '#050');
+                FB.Draw.circle(this.x + (this.r / 2), (this.y + this.r) - 10, this.r / 3, 'rgba(0,0,0,0.08)');
+                FB.Draw.rect(this.x + this.r, this.y + this.r, 10, this.r, 'brown', '#d20');
+            }
+
+            this.respawn = function () {
+                this.x = FB.WIDTH + this.r;
+            }
+        }
+
+        FB.Pipe = function (x, w) {
+            this.centerX = x;
+            this.coin = true
+            this.w = w;
+            this.h = FB.HEIGHT - 150;
+            this.vx = -1;
+            this.type = 'pipe';
+
+            this.update = function () {
+                this.centerX += this.vx;
+                if (this.centerX == (0 - this.w)) {
+                    this.respawn();
+                }
+            };
+
+            this.render = function () {
+                if (this.coin) {
+                    FB.Draw.circle(this.centerX + this.w / 2 - 5, this.centerY - 5, 5, "Gold")
+                }
+                FB.Draw.rect(this.centerX, 0, this.w, this.centerY - 50, '#8ED6FF');
+                FB.Draw.rect(this.centerX, this.centerY + 50, this.w, this.h - this.centerY, '#8ED6FF');
+            }
+
+            this.respawn = function () {
+                // Use deterministic random if available
+                if (window.LOBBY_RANDOM) {
+                    this.centerY = Math.floor(window.LOBBY_RANDOM() * (220 - 70 + 1) + 70);
+                } else {
+                    this.centerY = this.randomIntFromInterval(70, 220);
+                }
+                this.centerX = 320 - this.w + 160;
+                this.coin = true;
+            }
+
+            this.randomIntFromInterval = function (min, max) {
+                // Use deterministic random if available
+                if (window.LOBBY_RANDOM) {
+                    return Math.floor(window.LOBBY_RANDOM() * (max - min + 1) + min);
+                }
+                return Math.floor(Math.random() * (max - min + 1) + min);
+            }
+
+            // Initialize with deterministic random
+            if (window.LOBBY_RANDOM) {
+                this.centerY = Math.floor(window.LOBBY_RANDOM() * (220 - 70 + 1) + 70);
+            } else {
+                this.centerY = this.randomIntFromInterval(70, 220);
+            }
+        }
+
+        FB.Bird = function () {
+            this.img = new Image();
+            this.img.src = '/games/sol-bird/client/bird.png'; // Absolute path
+            this.gravity = 0.25;
+            this.width = 34;
+            this.height = 24;
+            this.ix = 0;
+            this.iy = 0;
+            this.fr = 0;
+            this.vy = 180;
+            this.vx = 70;
+            this.velocity = 0;
+            this.play = false;
+            this.jump = -4.6;
+            this.rotation = 0;
+            this.type = 'bird';
+            
+            this.update = function () {
+                if (this.fr++ > 5) {
+                    this.fr = 0;
+                    if (this.iy == this.height * 3) {
+                        this.iy = 0
+                    }
+                    this.iy += this.height;
+                }
+                if (this.play) {
+                    this.velocity += this.gravity;
+                    this.vy += this.velocity;
+                    if (this.vy <= 0) {
+                        this.vy = 0;
+                    }
+                    if (this.vy >= 370) {
+                        this.vy = 370;
+                    }
+                    this.rotation = Math.min((this.velocity / 10) * 90, 90);
+                }
+                if (FB.Input.tapped) {
+                    this.play = true;
+                    play_sound(soundJump);
+                    this.velocity = this.jump;
+                }
+            };
+
+            this.render = function () {
+                FB.Draw.Sprite(this.img, this.ix, this.iy, this.width, this.height, this.vx, this.vy, this.width, this.height, this.rotation);
+            }
+        }
+
+        // Collision detection
+        FB.Collides = function (bird, pipe) {
+            if(bird.vy >=370){                  
+                 return true;
+            }
+            if (pipe.coin && bird.vx > pipe.centerX + pipe.w / 2 - 5) {
+                pipe.coin = false;
+                FB.score.coins += 1;
+                FB.digits = FB.score.coins.toString().split('');
+                play_sound(soundScore);
+            }
+
+            var bx1 = bird.vx - bird.width / 2;
+            var by1 = bird.vy - bird.height / 2;
+            var bx2 = bird.vx + bird.width / 2;
+            var by2 = bird.vy + bird.height / 2;
+
+            var upx1 = pipe.centerX;
+            var upy1 = 0;
+            var upx2 = pipe.centerX + pipe.w;
+            var upy2 = pipe.centerY - 50;
+
+            var lpx1 = pipe.centerX;
+            var lpy1 = pipe.centerY + 50;
+            var lpx2 = upx2;
+            var lpy2 = pipe.h;
+
+            var c1 = !(bx1 > upx2 || bx2 < upx1 || by1 > upy2 || by2 < upy1)
+            var c2 = !(bx1 > lpx2 || bx2 < lpx1 || by1 > lpy2 || by2 < lpy1)
+
+            return (c1 || c2)
+        };
+        
+        // Game states
+        window.Splash = function(){
+            this.banner = new Image();
+            this.banner.src = "/games/sol-bird/client/splash.png"; // Absolute path
+            
+            this.init = function(){
+                console.log('[SolBird] Splash.init() called');
+                play_sound(soundSwoosh);
+                FB.distance = 0;
+                FB.bg_grad = "day";
+                FB.entities = [];
+                FB.score.taps = FB.score.coins = 0;
+                
+                // Use deterministic random for clouds if available
+                const rand = window.LOBBY_RANDOM || Math.random;
+                FB.entities.push(new FB.Cloud(30, ~~ (rand() * FB.HEIGHT / 2)));
+                FB.entities.push(new FB.Cloud(130, ~~ (rand() * FB.HEIGHT / 2)));
+                FB.entities.push(new FB.Cloud(230, ~~ (rand() * FB.HEIGHT / 2)));
+                for (i = 0; i < 2; i += 1) {
+                    FB.entities.push(new FB.BottomBar(FB.WIDTH * i, FB.HEIGHT - 100, FB.WIDTH));
+                }
+                FB.entities.push(new FB.Tree(~~(rand() * FB.WIDTH), FB.HEIGHT - 160));
+                FB.entities.push(new FB.Tree(~~(rand() * FB.WIDTH + 50), FB.HEIGHT - 160));
+                FB.entities.push(new FB.Tree(~~(rand() * FB.WIDTH + 100), FB.HEIGHT - 160));
+                
+                // Check if multiplayer sync is active - if so, wait for startGame event
+                if (window.solBirdMultiplayerSync && window.solBirdMultiplayerSync.gameStarted) {
+                    document.getElementById('connectionStatus').textContent = 'Waiting for game start...';
+                } else {
+                    document.getElementById('connectionStatus').textContent = 'Ready to Play';
+                }
+            }
+            
+            this.update = function(){
+                for (i = 0; i < FB.entities.length; i += 1) {
+                    FB.entities[i].update();                    
+                }
+                // Only allow tap to start if not in multiplayer mode
+                if (FB.Input.tapped && (!window.solBirdMultiplayerSync || !window.solBirdMultiplayerSync.gameStarted)) {
+                    FB.changeState('Play');
+                    FB.Input.tapped = false;
+                }
+            }
+            
+            this.render = function(){
+                FB.Draw.Image(this.banner,66,100);
+            }
+        }
+        
+        window.Play = function(){
+            this.init = function(){			
+                console.log('[SolBird] Play.init() called - starting game!');
+                
+                FB.entities.push(new FB.Pipe(FB.WIDTH * 2, 50));
+                FB.entities.push(new FB.Pipe(FB.WIDTH * 2 + FB.WIDTH / 2, 50));
+                FB.entities.push(new FB.Pipe(FB.WIDTH * 3, 50));
+
+                FB.bird = new FB.Bird();
+                FB.entities.push(FB.bird);
+                
+                for(var n=0;n<10;n++){
+                    var img = new Image();
+                    img.src = "/games/sol-bird/client/font_small_" + n +'.png'; // Absolute path
+                    FB.fonts.push(img);
+                }
+                FB.digits = ["0"];
+                
+                document.getElementById('connectionStatus').textContent = 'Playing';
+            }
+            
+            this.update = function() { 
+                FB.distance += 1;
+                var levelUp = ((FB.distance % 2048) === 0) ? true : false;
+                if (levelUp) {
+                    var bg = "day";
+                    var gradients = ["day", "dusk", "night", "dawn"];
+                    for (var i = 0; i < gradients.length; i++) {
+                        if (FB.bg_grad === gradients[i]) {
+                            if (i == gradients.length - 1) {
+                                bg = "day";
+                            } else {
+                                bg = gradients[i + 1];
+                            }
+                        }
+                    }
+                    FB.bg_grad = bg;
+                }
+
+                if (FB.Input.tapped) {
+                    FB.score.taps += 1;
+                }
+
+                for (i = 0; i < FB.entities.length; i += 1) {
+                    FB.entities[i].update();
+                    if (FB.entities[i].type === 'pipe') {
+                        var hit = FB.Collides(FB.bird, FB.entities[i]);
+                        if (hit) {
+                            play_sound(soundHit);
+                            
+                            // Notify multiplayer sync of death
+                            if (window.solBirdMultiplayerSync) {
+                                window.solBirdMultiplayerSync.handlePlayerDeath();
+                            }
+                            
+                            FB.changeState('GameOver');
+                             break;
+                        }
+                    }
+                }
+            }
+            
+            this.render = function() { 
+                var X = (FB.WIDTH/2-(FB.digits.length*14)/2);                
+                for(var i = 0; i < FB.digits.length; i++) {
+                  FB.Draw.Image(FB.fonts[Number(FB.digits[i])],X+(i*14),10);
+                }
+            }
+        }
+        
+        window.GameOver = function(){
+            this.getMedal = function() {
+               var score = FB.score.coins;
+               if(score <= 10) medal = "bronze";
+               if(score >= 20) medal = "silver";
+               if(score >= 30) medal = "gold";
+               if(score >= 40) medal = "platinum";
+               return medal;
+            }
+            
+            this.getHighScore = function(){
+                var savedscore = getCookie("highscore");
+                if(savedscore != ""){
+                    var hs = parseInt(savedscore) || 0;
+                    if(hs < FB.score.coins) {
+                     hs = FB.score.coins
+                     setCookie("highscore", hs, 999);
+                    }
+                    return hs;
+                  } else {                     
+                    setCookie("highscore", FB.score.coins, 999);
+                    return  FB.score.coins;
+                  }
+            }
+            
+            this.init = function(){
+                console.log('[SolBird] GameOver.init() called');
+                        
+                var that = this;
+                setTimeout(function() {
+                    play_sound(soundDie);
+                    that.banner = new Image();
+                    that.banner.src = "/games/sol-bird/client/scoreboard.png"; // Absolute path
+                    var m = that.getMedal();
+                    that.medal =  new Image();
+                    that.medal.src = '/games/sol-bird/client/medal_' + m +'.png'; // Absolute path
+                    that.replay = new Image();
+                    that.replay.src = "/games/sol-bird/client/replay.png"; // Absolute path
+                    that.highscore = that.getHighScore() ;
+                }, 500);
+                
+                document.getElementById('connectionStatus').textContent = 'Game Over';
+            }
+            
+            this.update = function(){				
+                if (FB.Input.tapped) {
+                    var x = FB.Input.x;
+                    var y = FB.Input.y;
+                    
+                     if((x >= 102.5 && x <= 102.5+115) && (y >= 260 && y <= 260+70)){       
+                        FB.changeState('Splash');
+                    }
+                    FB.Input.tapped = false;
+                }
+                FB.bird.update();
+            }
+            
+            this.render = function(){
+                if(this.banner){
+                    FB.Draw.Image(this.banner,42,70);
+                    FB.Draw.Image(this.medal,75,183);
+                    FB.Draw.Image(this.replay,102.5,260);
+                    FB.Draw.text(FB.score.coins, 220, 185, 15, 'black');
+                    FB.Draw.text(this.highscore, 220, 225, 15, 'black');
+                }
+            }
+        }
+
+        // Track asset loading
+        let assetsLoaded = false;
+        let gameInitialized = false;
+        
+        function checkAssetsLoaded() {
+            // Check if all images are loaded
+            const images = [
+                '/games/sol-bird/client/bird.png',
+                '/games/sol-bird/client/splash.png',
+                '/games/sol-bird/client/scoreboard.png',
+                '/games/sol-bird/client/replay.png'
+            ];
+            
+            let loadedCount = 0;
+            images.forEach(src => {
+                const img = new Image();
+                img.onload = () => {
+                    loadedCount++;
+                    if (loadedCount === images.length) {
+                        assetsLoaded = true;
+                        console.log('[SolBird] All assets loaded');
+                        tryStartGame();
+                    }
+                };
+                img.onerror = () => {
+                    loadedCount++;
+                    if (loadedCount === images.length) {
+                        assetsLoaded = true;
+                        console.warn('[SolBird] Some assets failed to load, continuing...');
+                        tryStartGame();
+                    }
+                };
+                img.src = src;
+            });
+        }
+        
+        function tryStartGame() {
+            if (gameInitialized) return;
+            
+            // Wait for both assets and WebSocket (if multiplayer sync exists)
+            const sync = window.solBirdMultiplayerSync;
+            if (sync) {
+                sync.assetsLoaded = assetsLoaded;
+                sync.tryStartGame();
+            } else {
+                // Single player mode - just initialize
+                if (assetsLoaded && !gameInitialized) {
+                    gameInitialized = true;
+                    FB.init();
+                    // Send GAME_READY for single player
+                    try {
+                        window.parent.postMessage({ type: "GAME_READY" }, "*");
+                    } catch (e) {
+                        console.warn('[SolBird] Failed to send GAME_READY:', e);
+                    }
+                }
+            }
+        }
+        
+        // Initialize game when window loads
+        window.addEventListener('load', function() {
+            console.log('[SolBird] Window loaded inside Sol Bird iframe');
+            
+            // Start loading assets
+            checkAssetsLoaded();
+            
+            // If multiplayer sync exists, it will call tryStartGame when ready
+            // Otherwise, initialize immediately after assets load
+            if (!window.solBirdMultiplayerSync) {
+                // Single player - wait for assets then init
+                const checkAssets = setInterval(() => {
+                    if (assetsLoaded) {
+                        clearInterval(checkAssets);
+                        if (!gameInitialized) {
+                            gameInitialized = true;
+                            console.log('[SolBird] Calling FB.init()...');
+                            FB.init();
+                            try {
+                                window.parent.postMessage({ type: "GAME_READY" }, "*");
+                            } catch (e) {
+                                console.warn('[SolBird] Failed to send GAME_READY:', e);
+                            }
+                        }
+                    }
+                }, 100);
+            }
+        }, false);
+        
+        // Remove resize listener that causes reflows
+        // window.addEventListener('resize', FB.resize, false); // DISABLED
+        
+        // Disable auto-focus and auto-resize loops
+        window.onresize = null;
+        if (document.body) {
+            document.body.onresize = null;
+        }
+        
+        // Prevent scroll resets
+        window.onscroll = null;
+        
+        // Remove any interval loops for canvas measurement
+        // (These would be in the game code itself if they exist)
+        
+        // Expose for multiplayer wrapper
+        window.FB = FB;
+        
+        console.log('[SolBird] Game engine loaded, waiting for window load event');
+    </script>
+    
+    <!-- Socket.IO for multiplayer -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    
+    <!-- Real-time multiplayer synchronization -->
+    <script src="/games/sol-bird/client/multiplayerSync.js"></script>
+    
+    <!-- Legacy multiplayer wrapper (for compatibility) -->
+    <script src="/games/sol-bird/client/multiplayerWrapper.js"></script>
+</body>
+</html>

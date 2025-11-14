@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: degn-matchmaker
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: MATCHMAKER_URL
+        sync: false
+      - key: MATCHMAKER_WS_URL
+        sync: false
+      - key: FRONTEND_URL
+        value: https://degn-gg.vercel.app
+      - key: SOLANA_RPC
+        value: https://api.testnet.solana.com
+      - key: ESCROW_PRIVATE_KEY
+        sync: false
+

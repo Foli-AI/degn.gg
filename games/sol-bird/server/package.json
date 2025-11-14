@@ -1,0 +1,23 @@
+{
+  "name": "sol-bird-server",
+  "version": "1.0.0",
+  "description": "Sol-Bird Authoritative Game Server",
+  "main": "gameServer.ts",
+  "scripts": {
+    "dev": "npx ts-node gameServer.ts",
+    "start": "node dist/gameServer.js",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["solana", "flappy-bird", "multiplayer", "game-server"],
+  "author": "DEGN.gg",
+  "license": "MIT",
+  "dependencies": {
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}

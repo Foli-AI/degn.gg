@@ -1,0 +1,153 @@
+-- DEGN.gg Schema Migration - Ensure Required Tables
+-- This migration ensures all required tables exist with proper constraints
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create profiles table
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  wallet_address TEXT UNIQUE NOT NULL,
+  username TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create lobbies table
+CREATE TABLE IF NOT EXISTS lobbies (
+  id TEXT PRIMARY KEY,
+  game_type TEXT NOT NULL,
+  max_players INTEGER NOT NULL DEFAULT 2,
+  entry_amount DECIMAL(10, 9) DEFAULT 0,
+  status TEXT DEFAULT 'waiting' CHECK (status IN ('waiting', 'ready', 'in-progress', 'completed')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create entries table (for payments and lobby participation)
+CREATE TABLE IF NOT EXISTS entries (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  lobby_id TEXT NOT NULL,
+  wallet TEXT NOT NULL,
+  paid BOOLEAN DEFAULT FALSE,
+  transaction_signature TEXT,
+  amount_sol DECIMAL(10, 9),
+  entry_amount DECIMAL(10, 9),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  CONSTRAINT unique_lobby_wallet UNIQUE(lobby_id, wallet)
+);
+
+-- Create matches table
+CREATE TABLE IF NOT EXISTS matches (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  lobby_id TEXT NOT NULL,
+  winner_wallet TEXT,
+  pot_amount DECIMAL(10, 9),
+  game_duration INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create payments table (legacy compatibility)
+CREATE TABLE IF NOT EXISTS payments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  lobby_id TEXT NOT NULL,
+  player_address TEXT NOT NULL,
+  transaction_signature TEXT UNIQUE NOT NULL,
+  amount_sol DECIMAL(10, 9) NOT NULL,
+  entry_amount DECIMAL(10, 9) NOT NULL,
+  status TEXT DEFAULT 'confirmed',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Add foreign key constraints if they don't exist
+DO $$ 
+BEGIN
+  -- Add foreign key from entries to lobbies
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'fk_entries_lobby_id'
+  ) THEN
+    ALTER TABLE entries ADD CONSTRAINT fk_entries_lobby_id 
+      FOREIGN KEY (lobby_id) REFERENCES lobbies(id) ON DELETE CASCADE;
+  END IF;
+  
+  -- Add foreign key from matches to lobbies
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'fk_matches_lobby_id'
+  ) THEN
+    ALTER TABLE matches ADD CONSTRAINT fk_matches_lobby_id 
+      FOREIGN KEY (lobby_id) REFERENCES lobbies(id);
+  END IF;
+END $$;
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_profiles_wallet_address ON profiles(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_lobbies_status ON lobbies(status);
+CREATE INDEX IF NOT EXISTS idx_lobbies_game_type ON lobbies(game_type);
+CREATE INDEX IF NOT EXISTS idx_entries_lobby_id ON entries(lobby_id);
+CREATE INDEX IF NOT EXISTS idx_entries_wallet ON entries(wallet);
+CREATE INDEX IF NOT EXISTS idx_entries_paid ON entries(paid);
+CREATE INDEX IF NOT EXISTS idx_matches_lobby_id ON matches(lobby_id);
+CREATE INDEX IF NOT EXISTS idx_matches_winner ON matches(winner_wallet);
+CREATE INDEX IF NOT EXISTS idx_payments_lobby_id ON payments(lobby_id);
+CREATE INDEX IF NOT EXISTS idx_payments_player_address ON payments(player_address);
+
+-- Enable Row Level Security
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lobbies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE matches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+
+-- Create permissive policies for development (adjust for production)
+DO $$ 
+BEGIN
+  -- Drop existing policies if they exist
+  DROP POLICY IF EXISTS "Allow all on profiles" ON profiles;
+  DROP POLICY IF EXISTS "Allow all on lobbies" ON lobbies;
+  DROP POLICY IF EXISTS "Allow all on entries" ON entries;
+  DROP POLICY IF EXISTS "Allow all on matches" ON matches;
+  DROP POLICY IF EXISTS "Allow all on payments" ON payments;
+  
+  -- Create new policies
+  CREATE POLICY "Allow all on profiles" ON profiles FOR ALL USING (true);
+  CREATE POLICY "Allow all on lobbies" ON lobbies FOR ALL USING (true);
+  CREATE POLICY "Allow all on entries" ON entries FOR ALL USING (true);
+  CREATE POLICY "Allow all on matches" ON matches FOR ALL USING (true);
+  CREATE POLICY "Allow all on payments" ON payments FOR ALL USING (true);
+END $$;
+
+-- Create update triggers
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+DROP TRIGGER IF EXISTS update_profiles_updated_at ON profiles;
+CREATE TRIGGER update_profiles_updated_at 
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_lobbies_updated_at ON lobbies;
+CREATE TRIGGER update_lobbies_updated_at 
+  BEFORE UPDATE ON lobbies
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Add table comments
+COMMENT ON TABLE profiles IS 'User profiles linked to wallet addresses';
+COMMENT ON TABLE lobbies IS 'Game lobbies where players gather before matches start';
+COMMENT ON TABLE entries IS 'Tracks which players joined and paid for each lobby';
+COMMENT ON TABLE matches IS 'Completed game results and payouts';
+COMMENT ON TABLE payments IS 'Transaction records for entry fee payments (legacy)';
+
+-- Verify schema
+SELECT 
+  'Schema verification' as status,
+  (SELECT count(*) FROM information_schema.tables WHERE table_name IN ('profiles', 'lobbies', 'entries', 'matches', 'payments')) as tables_created;
+
+-- Success message
+SELECT '✅ DEGN.gg schema migration completed successfully!' as result;
