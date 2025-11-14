@@ -3,7 +3,7 @@ services:
     name: degn-matchmaker
     env: node
     buildCommand: npm install && npm run build
-    startCommand: npm start
+    startCommand: node dist/server.js
     autoDeploy: true
     envVars:
       - key: NODE_ENV
