@@ -33,14 +33,15 @@ export const GAME_CONFIG = {
     defaultEntry: 0.1,
     type: '1v1' as const
   },
-  'sol-bird': {
-    name: 'Sol Bird (Flappy)',
+  'sol-bird-race': {
+    name: 'Sol Bird: Race Royale',
     minPlayers: 2,
-    maxPlayers: 2,
+    maxPlayers: 8,
     minEntry: 0.01,
-    maxEntry: 0.01,
-    defaultEntry: 0.01,
-    type: '1v1' as const
+    maxEntry: 10,
+    defaultEntry: 0.05,
+    type: 'battle-royale' as const,
+    hasCustomSettings: true as const
   },
   'slither': {
     name: 'Slither (Serpent Royale)',
@@ -68,7 +69,7 @@ interface UseMatchmakerState {
   playerId: string | null;
   lobbies: LobbyListItem[];
   currentLobby: Lobby | null;
-  status: 'disconnected' | 'connecting' | 'connected' | 'in-lobby' | 'ready' | 'in-game';
+  status: 'disconnected' | 'connecting' | 'connected' | 'in-lobby' | 'in-game';
   error: string | null;
   isLoading: boolean;
 }
@@ -102,6 +103,11 @@ export function useMatchmaker() {
 
   // Connect to matchmaker
   const connect = useCallback((username?: string, walletAddress?: string) => {
+    if (!socket) {
+      console.warn('[useMatchmaker] Socket not initialized');
+      return;
+    }
+    
     console.log('[useMatchmaker] connect() called, socket.connected:', socket.connected);
     
     // If socket is not connected, wait for connection first
@@ -110,6 +116,8 @@ export function useMatchmaker() {
       
       // Wait for socket to connect, then join
       const onConnect = () => {
+        if (!socket) return;
+        
         console.log('[useMatchmaker] Socket connected, joining matchmaker...');
         
         // Use real Phantom wallet if connected, otherwise fall back to mock
@@ -139,18 +147,20 @@ export function useMatchmaker() {
         socket.off('connect', onConnect);
       };
       
-      socket.once('connect', onConnect);
-      
-      // If connection fails after timeout, show error
-      setTimeout(() => {
-        if (!socket.connected) {
-          setState(prev => ({ 
-            ...prev, 
-            status: 'disconnected',
-            error: 'Failed to connect to matchmaker. Make sure the server is running on port 3001.'
-          }));
-        }
-      }, 10000);
+      if (socket) {
+        socket.once('connect', onConnect);
+        
+        // If connection fails after timeout, show error
+        setTimeout(() => {
+          if (socket && !socket.connected) {
+            setState(prev => ({ 
+              ...prev, 
+              status: 'disconnected',
+              error: 'Failed to connect to matchmaker. Make sure the server is running on port 3001.'
+            }));
+          }
+        }, 10000);
+      }
       
       return;
     }
@@ -394,6 +404,8 @@ export function useMatchmaker() {
 
   // Socket event listeners
   useEffect(() => {
+    if (!socket) return;
+    
     const handleConnect = () => {
       setState(prev => ({ ...prev, status: 'connected', error: null }));
     };
@@ -424,7 +436,7 @@ export function useMatchmaker() {
     };
 
     const handleLobbyReady = (data: { lobbyId: string; gameType: string; players: Player[] }) => {
-      setState(prev => ({ ...prev, status: 'ready' }));
+      setState(prev => ({ ...prev, status: 'in-lobby' }));
       console.log('🚀 Lobby ready, game starting soon...', data);
     };
 
@@ -444,6 +456,7 @@ export function useMatchmaker() {
       if (typeof window !== 'undefined') {
         const gameRoutes: Record<string, string> = {
           'sol-bird': '/play/sol-bird',
+          'sol-bird-race': '/play/sol-bird',
           'coinflip': '/play/coinflip', 
           'connect4': '/play/connect4',
           'slither': '/play/slither',
@@ -487,35 +500,39 @@ export function useMatchmaker() {
     };
 
     // Register event listeners
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('matchmaker:welcome', handleWelcome);
-    socket.on('lobby-joined', handleLobbyJoined);
-    socket.on('lobby-ready', handleLobbyReady);
-    socket.on('game:start', handleGameStart);
-    socket.on('lobby-update', handleLobbyUpdate);
-    socket.on('lobbyListUpdate', handleLobbyListUpdate);
-    socket.on('match-start', handleMatchStart);
-    socket.on('match-end', handleMatchEnd);
-    socket.on('error', handleError);
+    if (socket) {
+      socket.on('connect', handleConnect);
+      socket.on('disconnect', handleDisconnect);
+      socket.on('matchmaker:welcome', handleWelcome);
+      socket.on('lobby-joined', handleLobbyJoined);
+      socket.on('lobby-ready', handleLobbyReady);
+      socket.on('game:start', handleGameStart);
+      socket.on('lobby-update', handleLobbyUpdate);
+      socket.on('lobbyListUpdate', handleLobbyListUpdate);
+      socket.on('match-start', handleMatchStart);
+      socket.on('match-end', handleMatchEnd);
+      socket.on('error', handleError);
 
-    // Auto-connect if not connected
-    if (socket.connected) {
-      handleConnect();
+      // Auto-connect if not connected
+      if (socket.connected) {
+        handleConnect();
+      }
     }
 
     return () => {
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      socket.off('matchmaker:welcome', handleWelcome);
-      socket.off('lobby-joined', handleLobbyJoined);
-      socket.off('lobby-ready', handleLobbyReady);
-      socket.off('game:start', handleGameStart);
-      socket.off('lobby-update', handleLobbyUpdate);
-      socket.off('lobbyListUpdate', handleLobbyListUpdate);
-      socket.off('match-start', handleMatchStart);
-      socket.off('match-end', handleMatchEnd);
-      socket.off('error', handleError);
+      if (socket) {
+        socket.off('connect', handleConnect);
+        socket.off('disconnect', handleDisconnect);
+        socket.off('matchmaker:welcome', handleWelcome);
+        socket.off('lobby-joined', handleLobbyJoined);
+        socket.off('lobby-ready', handleLobbyReady);
+        socket.off('game:start', handleGameStart);
+        socket.off('lobby-update', handleLobbyUpdate);
+        socket.off('lobbyListUpdate', handleLobbyListUpdate);
+        socket.off('match-start', handleMatchStart);
+        socket.off('match-end', handleMatchEnd);
+        socket.off('error', handleError);
+      }
     };
   }, []);
 
@@ -523,10 +540,10 @@ export function useMatchmaker() {
   useEffect(() => {
     if (state.status === 'disconnected') {
       // Try to connect if socket is not connected
-      if (!socket.connected) {
+      if (socket && !socket.connected) {
         console.log('[useMatchmaker] Auto-connecting to matchmaker...');
         connect();
-      } else {
+      } else if (socket && socket.connected) {
         // Socket is already connected, trigger connect handler
         setState(prev => ({ ...prev, status: 'connected' }));
       }

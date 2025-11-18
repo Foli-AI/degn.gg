@@ -20,30 +20,37 @@ const getMatchmakerUrl = () => {
   return "http://localhost:3001";
 };
 
-const MATCHMAKER_URL = getMatchmakerUrl();
+// Only initialize socket on client side, not during build
+let socket: ReturnType<typeof io> | null = null;
 
-export const socket = io(MATCHMAKER_URL, { 
-  transports: ["websocket", "polling"], // Fallback to polling if websocket fails
-  withCredentials: true,
-  reconnection: true,
-  reconnectionDelay: 1000,
-  reconnectionAttempts: 5,
-  timeout: 20000
-});
+if (typeof window !== 'undefined') {
+  const MATCHMAKER_URL = getMatchmakerUrl();
+  socket = io(MATCHMAKER_URL, { 
+    transports: ["websocket", "polling"], // Fallback to polling if websocket fails
+    withCredentials: true,
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionAttempts: 5,
+    timeout: 20000
+  });
 
-// Add connection error logging
-socket.on("connect_error", (error) => {
-  console.error("[Socket] Connection error:", error.message);
-  console.error("[Socket] Attempting to connect to:", MATCHMAKER_URL);
-});
+  // Add connection error logging
+  socket.on("connect_error", (error) => {
+    console.error("[Socket] Connection error:", error.message);
+    console.error("[Socket] Attempting to connect to:", MATCHMAKER_URL);
+  });
 
-socket.on("connect", () => {
-  console.log("[Socket] ✅ Connected to matchmaker:", socket.id);
-});
+  socket.on("connect", () => {
+    console.log("[Socket] ✅ Connected to matchmaker:", socket?.id);
+  });
 
-socket.on("disconnect", (reason) => {
-  console.warn("[Socket] Disconnected:", reason);
-});
+  socket.on("disconnect", (reason) => {
+    console.warn("[Socket] Disconnected:", reason);
+  });
+}
+
+// Export socket with fallback for server-side rendering
+export { socket };
 
 // Socket event types for TypeScript
 export interface Player {
@@ -56,7 +63,7 @@ export interface Player {
 
 export interface Lobby {
   id: string;
-  gameType: 'coinflip' | 'connect4' | 'sol-bird' | 'slither' | 'agar';
+  gameType: 'coinflip' | 'connect4' | 'sol-bird' | 'sol-bird-race' | 'slither' | 'agar';
   players: Player[];
   maxPlayers: number;
   status: 'waiting' | 'ready' | 'in-progress';
@@ -76,33 +83,40 @@ export interface LobbyListItem {
 // Socket event handlers
 export const socketEvents = {
   // Client to server events
-  playerJoin: (data: { username: string; walletAddress?: string }) => 
-    socket.emit('player:join', data),
+  playerJoin: (data: { username: string; walletAddress?: string }) => {
+    if (socket) socket.emit('player:join', data);
+  },
   
-  joinLobby: (lobbyId: string) => 
-    socket.emit('join-lobby', { lobbyId }),
+  joinLobby: (lobbyId: string) => {
+    if (socket) socket.emit('join-lobby', { lobbyId });
+  },
   
-  leaveLobby: () => 
-    socket.emit('leave-lobby'),
+  leaveLobby: () => {
+    if (socket) socket.emit('leave-lobby');
+  },
   
-  requestLobbies: () => 
-    socket.emit('lobbies:list'),
+  requestLobbies: () => {
+    if (socket) socket.emit('lobbies:list');
+  },
 
   // Game-specific events for Sol-Bird
-  playerFlap: (lobbyId: string) => 
-    socket.emit('player:flap', { lobbyId }),
+  playerFlap: (lobbyId: string) => {
+    if (socket) socket.emit('player:flap', { lobbyId });
+  },
   
-  playerDied: (lobbyId: string, score: number) => 
-    socket.emit('player:died', { lobbyId, score }),
+  playerDied: (lobbyId: string, score: number) => {
+    if (socket) socket.emit('player:died', { lobbyId, score });
+  },
   
-  gameOver: (lobbyId: string, winner: string, scores: any[]) => 
-    socket.emit('game:over', { lobbyId, winner, scores })
+  gameOver: (lobbyId: string, winner: string, scores: any[]) => {
+    if (socket) socket.emit('game:over', { lobbyId, winner, scores });
+  }
 };
 
 // Connection status
 export const getConnectionStatus = () => ({
-  connected: socket.connected,
-  id: socket.id
+  connected: socket?.connected || false,
+  id: socket?.id || null
 });
 
 export default socket;

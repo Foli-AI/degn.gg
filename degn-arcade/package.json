@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/patch-sol-bird-index.cjs",
     "start": "next start",
     "lint": "next lint",
     "format": "prettier --write ."

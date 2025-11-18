@@ -224,5 +224,5 @@ export type PaymentUpdate = Updates<'payments'>
 
 // Enum types
 export type LobbyStatus = 'waiting' | 'ready' | 'in-progress' | 'completed'
-export type GameType = 'sol-bird' | 'coinflip' | 'connect4' | 'slither' | 'agar'
+export type GameType = 'sol-bird' | 'sol-bird-race' | 'coinflip' | 'connect4' | 'slither' | 'agar'
 export type PaymentStatus = 'pending' | 'confirmed' | 'failed'

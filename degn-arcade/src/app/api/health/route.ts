@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { validateServerEnv, validateClientEnv, printEnvDebug } from '@/lib/env';
 import { canUseAdmin } from '@/lib/supabase/admin';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     // Print environment debug info

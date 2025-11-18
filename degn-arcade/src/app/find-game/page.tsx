@@ -110,10 +110,14 @@ export default function FindGamePage() {
       }
     };
 
-    socket.on('match_start', handleMatchStart);
+    if (socket) {
+      socket.on('match_start', handleMatchStart);
+    }
 
     return () => {
-      socket.off('match_start', handleMatchStart);
+      if (socket) {
+        socket.off('match_start', handleMatchStart);
+      }
     };
   }, [selectedGame]);
 
@@ -147,10 +151,20 @@ export default function FindGamePage() {
   const handleCreateLobby = async () => {
     try {
       const config = GAME_CONFIG[selectedGame];
+
+      let maxPlayers = config.type === '1v1' ? 2 : customPlayerCount;
+      let entryAmount = config.type === '1v1' ? customWager : config.defaultEntry;
+
+      // Sol Bird: Race Royale – host chooses both player count (2–8) and entry fee
+      if (selectedGame === 'sol-bird-race') {
+        maxPlayers = customPlayerCount;
+        entryAmount = customWager;
+      }
+
       await createLobby({
         gameType: selectedGame,
-        maxPlayers: config.type === '1v1' ? 2 : customPlayerCount,
-        entryAmount: config.type === '1v1' ? customWager : config.defaultEntry
+        maxPlayers,
+        entryAmount
       });
       setShowCreateModal(false);
     } catch (error) {
@@ -160,7 +174,7 @@ export default function FindGamePage() {
 
   const handleQuickPlay = async () => {
     try {
-      if (selectedGame === 'sol-bird' || selectedGame === 'slither' || selectedGame === 'agar') {
+      if (selectedGame === 'sol-bird-race' || selectedGame === 'slither' || selectedGame === 'agar') {
         await findAndJoinBestMatch({ 
           gameType: selectedGame,
           entryAmount: GAME_CONFIG[selectedGame].defaultEntry
@@ -183,6 +197,7 @@ export default function FindGamePage() {
   });
 
   const config = GAME_CONFIG[selectedGame];
+  const isSolBirdRace = selectedGame === 'sol-bird-race';
 
   if (status === 'disconnected' || status === 'connecting') {
     return (
@@ -489,22 +504,39 @@ export default function FindGamePage() {
                   </p>
                 </div>
               ) : (
-                <div>
-                  <label className="block text-sm font-medium mb-2">Max Players</label>
-                  <select
-                    value={customPlayerCount}
-                    onChange={(e) => setCustomPlayerCount(parseInt(e.target.value))}
-                    className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white focus:border-purple-400 focus:outline-none"
-                  >
-                    {Array.from({ length: config.maxPlayers - config.minPlayers + 1 }, (_, i) => {
-                      const count = config.minPlayers + i;
-                      return (
-                        <option key={count} value={count} className="bg-slate-800">
-                          {count} players
-                        </option>
-                      );
-                    })}
-                  </select>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Max Players</label>
+                    <select
+                      value={customPlayerCount}
+                      onChange={(e) => setCustomPlayerCount(parseInt(e.target.value))}
+                      className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white focus:border-purple-400 focus:outline-none"
+                    >
+                      {Array.from({ length: config.maxPlayers - config.minPlayers + 1 }, (_, i) => {
+                        const count = config.minPlayers + i;
+                        return (
+                          <option key={count} value={count} className="bg-slate-800">
+                            {count} players
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {isSolBirdRace && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">Entry Fee (SOL)</label>
+                      <input
+                        type="number"
+                        min={config.minEntry}
+                        max={config.maxEntry}
+                        step="0.01"
+                        value={customWager}
+                        onChange={(e) => setCustomWager(parseFloat(e.target.value) || config.defaultEntry)}
+                        className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-white placeholder-gray-400 focus:border-purple-400 focus:outline-none"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
               
@@ -512,15 +544,22 @@ export default function FindGamePage() {
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400">Entry fee:</span>
                   <span className="text-white font-medium">
-                    {config.type === '1v1' ? customWager : config.defaultEntry} SOL
+                    {config.type === '1v1'
+                      ? customWager
+                      : isSolBirdRace
+                        ? customWager
+                        : config.defaultEntry} SOL
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400">Total pot:</span>
                   <span className="text-yellow-400 font-medium">
-                    {config.type === '1v1' 
-                      ? (customWager * 2).toFixed(3) 
-                      : (config.defaultEntry * customPlayerCount).toFixed(3)
+                    {config.type === '1v1'
+                      ? (customWager * 2).toFixed(3)
+                      : (
+                          (isSolBirdRace ? customWager : config.defaultEntry) *
+                          customPlayerCount
+                        ).toFixed(3)
                     } SOL
                   </span>
                 </div>

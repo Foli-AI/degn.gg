@@ -1,12 +1,31 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 import { SolanaWalletProvider } from "@/components/wallet/WalletProvider";
 import { WalletProfileSync } from "@/components/wallet/WalletProfileSync";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-heading",
+  display: "swap",
+});
+
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800", "900"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "DEGN.gg | The Next Generation Crypto Arcade",
@@ -43,12 +62,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable}`}>
+    <html lang="en" className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}>
       <head>
         {/* TODO: Remove mock wallet script in production */}
         <script src="/mock-wallet.js" defer></script>
       </head>
-      <body className="min-h-screen bg-base text-white">
+      <body className="min-h-screen bg-background text-foreground font-sans antialiased">
         <SolanaWalletProvider>
           <WalletProfileSync />
           {children}

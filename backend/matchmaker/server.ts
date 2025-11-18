@@ -79,7 +79,37 @@ async function initializeEscrowWallet() {
 }
 
 // ✅ Define allowed games for DEGN.gg
-const VALID_GAMES = ["sol-bird", "connect4", "slither", "agar"];
+// Note: "sol-bird-race" is the new Sol Bird: Race Royale game mode.
+const VALID_GAMES = ["sol-bird", "sol-bird-race", "connect4", "slither", "agar", "coinflip"];
+
+// ✅ Entry fee tiers (PvP model - players pay each other)
+const ENTRY_FEE_TIERS = [0.05, 0.1, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+
+// ✅ Game configurations
+const GAME_CONFIG = {
+  'sol-bird-race': { minPlayers: 4, maxPlayers: 8 },
+  'suroi': { minPlayers: 8, maxPlayers: 16 },
+  'slither': { minPlayers: 4, maxPlayers: 10 },
+  'agar': { minPlayers: 4, maxPlayers: 10 },
+  'coinflip': { minPlayers: 2, maxPlayers: 2 }
+} as const;
+
+// ✅ Bot system configuration
+const BOT_CONFIG = {
+  maxEntryFee: 0.5, // SOL - bots only join ≤ 0.5 SOL lobbies
+  fillWaitTime: 30000, // 30 seconds - wait before adding bots
+  winRates: {
+    small: 0.40, // 40% win rate for ≤ 8 players
+    large: 0.55, // 55% win rate for > 8 players
+  },
+  smallLobbyThreshold: 8, // players
+  replacement: true, // bots get replaced by real players
+} as const;
+
+// Bot wallet system (funded from house rake)
+let botWalletBalance = 0; // Track bot wallet balance in SOL
+const BOT_WALLET_MIN_BALANCE = 5; // Minimum balance to maintain (5 SOL)
+const BOT_WALLET_INITIAL_FUND = 10; // Initial fund from house rake (10 SOL)
 
 // Configure CORS for Socket.IO
 const allowedOrigins = [
@@ -109,24 +139,82 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Types
+// Bot names pool for random selection
+const BOT_NAMES = [
+  'CryptoBot', 'SolBot', 'AutoPlayer', 'BotMaster', 'AIPlayer', 'GhostPlayer',
+  'BotRacer', 'AutoRacer', 'BotPro', 'AceBot', 'BotKing', 'BotChamp',
+  'BotNinja', 'BotWarrior', 'BotElite', 'BotLegend', 'BotHero', 'BotStar'
+];
+
+// Generate random bot name
+function generateBotName(): string {
+  return BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + '_' + Math.random().toString(36).substr(2, 4);
+}
+
+// Bot wallet management
+function fundBotWallet(amountSOL: number) {
+  botWalletBalance += amountSOL;
+  logActivity(`💰 Bot wallet funded`, { amount: amountSOL, newBalance: botWalletBalance });
+}
+
+function useBotWallet(amountSOL: number): boolean {
+  if (botWalletBalance >= amountSOL) {
+    botWalletBalance -= amountSOL;
+    logActivity(`💰 Bot wallet used`, { amount: amountSOL, remainingBalance: botWalletBalance });
+    return true;
+  }
+  logActivity(`⚠️ Bot wallet insufficient`, { required: amountSOL, current: botWalletBalance });
+  return false;
+}
+
+function getBotWalletBalance(): number {
+  return botWalletBalance;
+}
+
+// Initialize bot wallet from house rake (call after house rake is received)
+function initializeBotWallet() {
+  if (botWalletBalance < BOT_WALLET_MIN_BALANCE) {
+    fundBotWallet(BOT_WALLET_INITIAL_FUND);
+    logActivity(`🤖 Bot wallet initialized`, { balance: botWalletBalance });
+  }
+}
+
+// Auto-replenish bot wallet from house rake (call after each match)
+function replenishBotWalletIfNeeded() {
+  if (botWalletBalance < BOT_WALLET_MIN_BALANCE) {
+    const needed = BOT_WALLET_MIN_BALANCE - botWalletBalance;
+    fundBotWallet(needed);
+    logActivity(`💰 Bot wallet replenished`, { added: needed, newBalance: botWalletBalance });
+  }
+}
+
 interface Player {
   id: string;
   username: string;
   socketId: string;
   walletAddress?: string;
   joinedAt: Date;
+  isBot?: boolean; // Track if player is a bot
 }
 
 interface Lobby {
   id: string;
-  gameType: 'sol-bird' | 'connect4' | 'slither' | 'agar' | 'coinflip';
+  gameType: 'sol-bird' | 'sol-bird-race' | 'connect4' | 'slither' | 'agar' | 'coinflip' | 'suroi';
   players: Player[];
   maxPlayers: number;
-  status: 'waiting' | 'ready' | 'in-progress';
+  status: 'waiting' | 'ready' | 'in-progress' | 'cancelled';
   createdAt: Date;
   createdBy: string;
-  entryAmount?: number; // SOL amount for entry
+  entryTier: number; // Entry fee tier (0.1, 0.5, 1.0, etc.) - PvP model
+  entryAmount?: number; // DEPRECATED: Use entryTier instead (kept for backwards compatibility)
+  timeoutTimer?: NodeJS.Timeout; // Timer for 2-minute timeout check
+  botFillTimer?: NodeJS.Timeout; // Timer for bot fill (30 seconds)
+  // Optional game-specific settings
+  settings?: {
+    maxPlayers: number;
+    entryFee: number;
+    pot: number;
+  };
 }
 
 // In-memory storage (replace with Redis/Database in production)
@@ -158,12 +246,16 @@ const lobbyPlayerPositions = new Map<string, Map<string, {
 interface Match {
   matchKey: string;
   lobbyId: string;
+  gameType: string;
   players: Array<{ playerId: string; socketId: string; wallet?: string; username: string }>;
   createdAt: number;
   state: 'in-progress' | 'ended';
   lastState: any;
   sockets: Map<string, WebSocket>; // playerId -> WebSocket
   playerAlive: Map<string, boolean>; // playerId -> alive status
+  // Race Royale-specific state
+  coins?: Map<string, number>; // playerId -> coin count
+  roundEndsAt?: number; // timestamp when round should end
 }
 
 const matches = new Map<string, Match>(); // matchKey -> Match
@@ -255,6 +347,50 @@ async function sendPayout(winnerAddress: string, amountSOL: number): Promise<str
   }
 }
 
+// Get house wallet address from environment (defaults to your wallet)
+function getHouseWalletAddress(): string {
+  return process.env.HOUSE_WALLET_ADDRESS || '35PgFHXEgryH9MD3PMotVYYjayCGbSywKBN1Pmyq8GWY';
+}
+
+// Send house rake to your wallet
+async function sendHouseRake(amountSOL: number): Promise<string | null> {
+  if (!escrowKeypair) {
+    console.error('Escrow keypair not available for house rake');
+    return null;
+  }
+
+  if (amountSOL <= 0) {
+    return null;
+  }
+
+  try {
+    const houseWallet = getHouseWalletAddress();
+    const housePubkey = new PublicKey(houseWallet);
+    const lamports = solToLamports(amountSOL);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: escrowKeypair.publicKey,
+        toPubkey: housePubkey,
+        lamports,
+      })
+    );
+
+    const signature = await sendAndConfirmTransaction(
+      connection,
+      transaction,
+      [escrowKeypair],
+      { commitment: 'confirmed' }
+    );
+
+    console.log(`💰 House rake sent: ${amountSOL} SOL to ${houseWallet}, signature: ${signature}`);
+    return signature;
+  } catch (error) {
+    console.error('Failed to send house rake:', error);
+    return null;
+  }
+}
+
 function logActivity(message: string, data?: any) {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 🎮 ${message}`, data ? JSON.stringify(data, null, 2) : '');
@@ -269,6 +405,8 @@ function broadcastLobbyUpdate(lobbyId: string) {
     gameType: lobby.gameType,
     players: lobby.players,
     maxPlayers: lobby.maxPlayers,
+    entryAmount: lobby.entryAmount,
+    settings: lobby.settings,
     status: lobby.status,
     createdAt: lobby.createdAt
   };
@@ -281,86 +419,302 @@ function broadcastLobbyUpdate(lobbyId: string) {
   logActivity(`Lobby update broadcasted`, { lobbyId, playerCount: lobby.players.length, status: lobby.status });
 }
 
+// Helper: Refund players and cancel lobby
+async function refundAndCancelLobby(lobbyId: string, reason: string) {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby || lobby.status !== 'waiting') return;
+
+  logActivity(`💰 Refunding players and cancelling lobby`, {
+    lobbyId,
+    reason,
+    playerCount: lobby.players.length,
+    entryTier: lobby.entryTier
+  });
+
+  // Clear timeout timer if exists
+  if (lobby.timeoutTimer) {
+    clearTimeout(lobby.timeoutTimer);
+    lobby.timeoutTimer = undefined;
+  }
+
+  // Notify all players
+  lobby.players.forEach(player => {
+    io.to(player.socketId).emit('lobby-cancelled', {
+      lobbyId,
+      reason,
+      refundAmount: lobby.entryTier || lobby.entryAmount || 0
+    });
+  });
+
+  // TODO: Implement actual SOL refund via Supabase RPC or direct transfer
+  // For now, just log it
+  console.log(`[REFUND] Would refund ${lobby.players.length} players ${lobby.entryTier || lobby.entryAmount || 0} SOL each`);
+
+  // Remove lobby
+  lobby.players.forEach(player => {
+    playerLobbies.delete(player.socketId);
+  });
+  lobbies.delete(lobbyId);
+  broadcastLobbyListUpdate();
+}
+
+// Helper: Add bots to lobby (fill exactly what's needed)
+function addBotsToLobby(lobbyId: string, count: number): number {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby || lobby.status !== 'waiting') return 0;
+
+  // Check if bots are allowed for this lobby (entry fee ≤ 0.5 SOL)
+  if (lobby.entryTier > BOT_CONFIG.maxEntryFee) {
+    logActivity(`🤖 Bots not allowed for high-tier lobby`, {
+      lobbyId,
+      entryTier: lobby.entryTier,
+      maxEntryFee: BOT_CONFIG.maxEntryFee
+    });
+    return 0;
+  }
+
+  // Check bot wallet balance
+  const entryFee = lobby.entryTier || lobby.entryAmount || 0;
+  const totalNeeded = entryFee * count;
+  
+  if (!useBotWallet(totalNeeded)) {
+    logActivity(`⚠️ Cannot add bots - insufficient bot wallet balance`, {
+      lobbyId,
+      needed: totalNeeded,
+      current: getBotWalletBalance()
+    });
+    return 0;
+  }
+
+  const botsAdded: Player[] = [];
+  for (let i = 0; i < count; i++) {
+    const bot: Player = {
+      id: `bot_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      username: generateBotName(),
+      socketId: `bot_socket_${Date.now()}_${i}`,
+      joinedAt: new Date(),
+      isBot: true
+    };
+    
+    lobby.players.push(bot);
+    botsAdded.push(bot);
+  }
+
+  logActivity(`🤖 Added ${botsAdded.length} bots to lobby`, {
+    lobbyId,
+    botsAdded: botsAdded.length,
+    totalPlayers: lobby.players.length,
+    entryFee,
+    botWalletUsed: totalNeeded
+  });
+
+  broadcastLobbyUpdate(lobbyId);
+  return botsAdded.length;
+}
+
+// Helper: Replace bots with real players (when real player joins)
+function replaceBotWithRealPlayer(lobbyId: string, realPlayer: Player): boolean {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby || lobby.status !== 'waiting') return false;
+
+  // Find first bot in lobby
+  const botIndex = lobby.players.findIndex(p => p.isBot === true);
+  if (botIndex === -1) return false; // No bots to replace
+
+  const bot = lobby.players[botIndex];
+  
+  // Refund bot entry fee to bot wallet
+  const entryFee = lobby.entryTier || lobby.entryAmount || 0;
+  fundBotWallet(entryFee);
+
+  // Replace bot with real player
+  lobby.players[botIndex] = realPlayer;
+  
+  logActivity(`🔄 Replaced bot with real player`, {
+    lobbyId,
+    botId: bot.id,
+    botName: bot.username,
+    realPlayerId: realPlayer.id,
+    realPlayerName: realPlayer.username,
+    refundedToBotWallet: entryFee
+  });
+
+  broadcastLobbyUpdate(lobbyId);
+  return true;
+}
+
+// Helper: Setup bot fill timer (30 seconds wait, then fill with bots)
+function setupBotFillTimer(lobbyId: string) {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby || lobby.status !== 'waiting') return;
+
+  // Don't add bots to high-tier lobbies (> 0.5 SOL)
+  if (lobby.entryTier > BOT_CONFIG.maxEntryFee) {
+    logActivity(`🤖 Bot fill disabled for high-tier lobby`, {
+      lobbyId,
+      entryTier: lobby.entryTier
+    });
+    return;
+  }
+
+  // Clear existing timer if any
+  if (lobby.botFillTimer) {
+    clearTimeout(lobby.botFillTimer);
+  }
+
+  lobby.botFillTimer = setTimeout(() => {
+    const currentLobby = lobbies.get(lobbyId);
+    if (!currentLobby || currentLobby.status !== 'waiting') return;
+
+    const config = GAME_CONFIG[currentLobby.gameType as keyof typeof GAME_CONFIG];
+    const minPlayers = config?.minPlayers || 2;
+    const maxPlayers = currentLobby.maxPlayers;
+    
+    // Count real players (non-bots)
+    const realPlayerCount = currentLobby.players.filter(p => !p.isBot).length;
+    const botCount = currentLobby.players.filter(p => p.isBot).length;
+    const totalPlayers = realPlayerCount + botCount;
+
+    // Calculate how many bots we need
+    const playersNeeded = Math.max(minPlayers - totalPlayers, 0);
+    
+    if (playersNeeded > 0 && totalPlayers < maxPlayers) {
+      const botsToAdd = Math.min(playersNeeded, maxPlayers - totalPlayers);
+      addBotsToLobby(lobbyId, botsToAdd);
+      
+      // Check if lobby is ready after adding bots
+      checkLobbyReady(lobbyId);
+    }
+  }, BOT_CONFIG.fillWaitTime);
+
+  logActivity(`⏱️ Bot fill timer set (30 seconds)`, {
+    lobbyId,
+    entryTier: lobby.entryTier
+  });
+}
+
+// Helper: Check if lobby should timeout (2 minutes without minimum players)
+function setupLobbyTimeout(lobbyId: string) {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby || lobby.status !== 'waiting') return;
+
+  const config = GAME_CONFIG[lobby.gameType as keyof typeof GAME_CONFIG];
+  const minPlayers = config?.minPlayers || 2;
+  const timeoutMs = 2 * 60 * 1000; // 2 minutes
+
+  // Clear existing timer if any
+  if (lobby.timeoutTimer) {
+    clearTimeout(lobby.timeoutTimer);
+  }
+
+  lobby.timeoutTimer = setTimeout(() => {
+    const currentLobby = lobbies.get(lobbyId);
+    if (!currentLobby || currentLobby.status !== 'waiting') return;
+
+    // Count real players (non-bots)
+    const realPlayerCount = currentLobby.players.filter(p => !p.isBot).length;
+    
+    // Check if we have minimum real players
+    if (realPlayerCount < minPlayers) {
+      // For high-tier lobbies (> 0.5 SOL), refund and cancel (no bots)
+      if (currentLobby.entryTier > BOT_CONFIG.maxEntryFee) {
+        refundAndCancelLobby(
+          lobbyId,
+          `Not enough players (${realPlayerCount}/${minPlayers}). Try again later.`
+        );
+      } else {
+        // For low-tier lobbies, bots should have filled by now
+        // If still not enough, refund and cancel
+        refundAndCancelLobby(
+          lobbyId,
+          `Not enough players (${realPlayerCount}/${minPlayers}). Try queueing up in a bit.`
+        );
+      }
+    }
+  }, timeoutMs);
+
+  logActivity(`⏱️ Lobby timeout set (2 minutes)`, {
+    lobbyId,
+    minPlayers,
+    currentPlayers: lobby.players.length,
+    realPlayers: lobby.players.filter(p => !p.isBot).length,
+    entryTier: lobby.entryTier
+  });
+}
+
 function checkLobbyReady(lobbyId: string) {
   const lobby = lobbies.get(lobbyId);
   if (!lobby) return;
 
-  // Determine required players based on game type
-  let requiredPlayers = lobby.maxPlayers;
-  if (lobby.gameType === 'sol-bird') {
-    requiredPlayers = 2; // Enforce exactly 2 players for sol-bird
+  const config = GAME_CONFIG[lobby.gameType as keyof typeof GAME_CONFIG];
+  const minPlayers = config?.minPlayers || 2;
+  const maxPlayers = config?.maxPlayers || lobby.maxPlayers;
+
+  // Count real players (non-bots)
+  const realPlayerCount = lobby.players.filter(p => !p.isBot).length;
+  const botCount = lobby.players.filter(p => p.isBot).length;
+  const totalPlayers = lobby.players.length;
+
+  // Check minimum players requirement (including bots)
+  if (totalPlayers < minPlayers) {
+    // Setup timeout if not already set
+    if (!lobby.timeoutTimer) {
+      setupLobbyTimeout(lobbyId);
+    }
+    
+    // Setup bot fill timer for low-tier lobbies (≤ 0.5 SOL)
+    if (lobby.entryTier <= BOT_CONFIG.maxEntryFee && !lobby.botFillTimer) {
+      setupBotFillTimer(lobbyId);
+    }
+    
+    return; // Not enough players yet
   }
 
-  if (lobby.players.length >= requiredPlayers && lobby.status === 'waiting') {
+  // Clear timeout if we have enough players
+  if (lobby.timeoutTimer) {
+    clearTimeout(lobby.timeoutTimer);
+    lobby.timeoutTimer = undefined;
+  }
+
+  // Clear bot fill timer if we have enough players
+  if (lobby.botFillTimer) {
+    clearTimeout(lobby.botFillTimer);
+    lobby.botFillTimer = undefined;
+  }
+
+  // Check if we have enough players to start
+  if (totalPlayers >= minPlayers && lobby.status === 'waiting') {
     lobby.status = 'ready';
     
     logActivity(`🚀 Lobby is ready to start!`, {
       lobbyId,
       gameType: lobby.gameType,
-      playerCount: lobby.players.length,
-      maxPlayers: lobby.maxPlayers,
-      requiredPlayers,
-      is1v1: lobby.gameType === 'sol-bird'
+      totalPlayers,
+      realPlayers: realPlayerCount,
+      bots: botCount,
+      minPlayers,
+      maxPlayers,
     });
 
-    // Emit lobby-ready to all players in the lobby
+    // Emit lobby-ready to all players in the lobby (real players only, bots don't have sockets)
     lobby.players.forEach(player => {
-      io.to(player.socketId).emit('lobby-ready', {
-        lobbyId,
-        gameType: lobby.gameType,
-        players: lobby.players,
-        is1v1: lobby.gameType === 'sol-bird'
-      });
+      if (!player.isBot) {
+        io.to(player.socketId).emit('lobby-ready', {
+          lobbyId,
+          gameType: lobby.gameType,
+          players: lobby.players,
+          minPlayers,
+          maxPlayers
+        });
+      }
     });
-
-    // Emit lobby info for SolBird
-    if (lobby.gameType === 'sol-bird') {
-      io.to(lobbyId).emit('lobby-info', {
-        message: 'SolBird 1v1 match ready!',
-        maxPlayers: 2,
-        gameType: 'sol-bird',
-        requiredPlayers: 2
-      });
-    }
 
     broadcastLobbyUpdate(lobbyId);
     
-    // For Sol-Bird, only emit startGame when ALL players have joined
-    if (lobby.gameType === 'sol-bird') {
-      const requiredPlayers = lobby.maxPlayers || 2;
-      if (lobby.players.length >= requiredPlayers) {
-        logActivity(`🎮 All players joined, starting Sol-Bird game`, { 
-          lobbyId, 
-          playerCount: lobby.players.length,
-          requiredPlayers 
-        });
-        
-        // Mark lobby as ready
-        lobby.status = 'ready';
-        
-        // Emit startGame to all players
-        lobby.players.forEach(p => {
-          io.to(p.socketId).emit('startGame', {
-            lobbyId,
-            gameType: 'sol-bird',
-            players: lobby.players
-          });
-        });
-      } else {
-        logActivity(`🎮 Waiting for more players`, { 
-          lobbyId, 
-          current: lobby.players.length,
-          required: requiredPlayers 
-        });
-      }
-    }
-    
-    // Auto-start game after 3 seconds (for non-Sol-Bird games)
-    if (lobby.gameType !== 'sol-bird') {
-      setTimeout(() => {
-        startGame(lobbyId);
-      }, 3000);
-    }
+    // Auto-start game after 3 seconds
+    setTimeout(() => {
+      startGame(lobbyId);
+    }, 3000);
   }
 }
 
@@ -374,7 +728,8 @@ function startGame(lobbyId: string) {
     lobbyId,
     gameType: lobby.gameType,
     playerCount: lobby.players.length,
-    entryAmount: lobby.entryAmount
+    entryAmount: lobby.entryAmount,
+    settings: lobby.settings
   });
 
   // Broadcast game start to all players
@@ -454,7 +809,7 @@ io.on('connection', (socket) => {
     socket.emit('matchmaker:welcome', {
       playerId: player.id,
       message: 'Welcome to DEGN.gg Matchmaker!',
-      availableGames: ['sol-bird', 'connect4', 'slither', 'agar']
+      availableGames: ['sol-bird-race', 'connect4', 'slither', 'agar', 'coinflip']
     });
 
     // Broadcast updated stats
@@ -478,16 +833,51 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Count real players (non-bots)
+    const realPlayerCount = lobby.players.filter(p => !p.isBot).length;
+    const botCount = lobby.players.filter(p => p.isBot).length;
+    const totalPlayers = lobby.players.length;
+
     // Enforce SolBird 1v1 rules
     if (lobby.gameType === 'sol-bird') {
-      if (lobby.players.length >= 2) {
+      if (realPlayerCount >= 2) {
         socket.emit('error', { message: 'Lobby full (sol-bird is 1v1)', code: 'LOBBY_FULL_1V1' });
         return;
       }
     } else {
-      if (lobby.players.length >= lobby.maxPlayers) {
-        socket.emit('error', { message: 'Lobby is full.' });
-        return;
+      // Check if lobby is full (real players + bots)
+      if (totalPlayers >= lobby.maxPlayers) {
+        // Try to replace a bot with this real player
+        if (botCount > 0 && replaceBotWithRealPlayer(data.lobbyId, player)) {
+          // Bot replaced successfully, continue
+          playerLobbies.set(socket.id, data.lobbyId);
+          socket.join(data.lobbyId);
+          
+          logActivity(`🚪 Player joined lobby (replaced bot)`, {
+            playerId: player.id,
+            username: player.username,
+            lobbyId: data.lobbyId,
+            gameType: lobby.gameType,
+            playersInLobby: lobby.players.length,
+            maxPlayers: lobby.maxPlayers
+          });
+
+          socket.emit('lobby-joined', {
+            lobbyId: data.lobbyId,
+            gameType: lobby.gameType,
+            players: lobby.players,
+            maxPlayers: lobby.maxPlayers,
+            status: lobby.status
+          });
+
+          broadcastLobbyUpdate(data.lobbyId);
+          broadcastLobbyListUpdate();
+          checkLobbyReady(data.lobbyId);
+          return;
+        } else {
+          socket.emit('error', { message: 'Lobby is full.' });
+          return;
+        }
       }
     }
 
@@ -517,10 +907,24 @@ io.on('connection', (socket) => {
       player.walletAddress = data.walletAddress;
     }
 
-    // Add player to lobby
-    lobby.players.push(player);
-    playerLobbies.set(socket.id, data.lobbyId);
-    socket.join(data.lobbyId);
+    // Try to replace a bot first (if bots are present)
+    if (botCount > 0 && BOT_CONFIG.replacement) {
+      if (replaceBotWithRealPlayer(data.lobbyId, player)) {
+        // Bot replaced successfully
+        playerLobbies.set(socket.id, data.lobbyId);
+        socket.join(data.lobbyId);
+      } else {
+        // No bots to replace, add normally
+        lobby.players.push(player);
+        playerLobbies.set(socket.id, data.lobbyId);
+        socket.join(data.lobbyId);
+      }
+    } else {
+      // No bots to replace, add normally
+      lobby.players.push(player);
+      playerLobbies.set(socket.id, data.lobbyId);
+      socket.join(data.lobbyId);
+    }
 
     logActivity(`🚪 Player joined lobby`, {
       playerId: player.id,
@@ -719,8 +1123,8 @@ io.on('connection', (socket) => {
       io.to(p.socketId).emit('LOBBY_UPDATE', lobbyUpdate);
     });
 
-    // Check for game over (only 1 player alive)
-    if (aliveCount === 1 && lobby.status === 'in-progress') {
+    // Check for game over (only 1 player alive) – for classic Sol-Bird only
+    if (aliveCount === 1 && lobby.status === 'in-progress' && lobby.gameType === 'sol-bird') {
       const winner = lobbyPlayers.find(p => p.isAlive);
       if (winner) {
         logActivity(`🏆 Game over - Winner: ${winner.username}`, { lobbyId, winnerId: winner.id });
@@ -1061,24 +1465,124 @@ app.get('/lobbies', (req: Request, res: Response) => {
   });
 });
 
+// Helper: Find or create lobby at specific tier (auto-matchmaking)
+function findOrCreateLobby(gameType: string, entryTier: number): Lobby {
+  // Validate entry tier
+  if (!ENTRY_FEE_TIERS.includes(entryTier)) {
+    throw new Error(`Invalid entry tier. Must be one of: ${ENTRY_FEE_TIERS.join(', ')}`);
+  }
+
+  // Get game config
+  const config = GAME_CONFIG[gameType as keyof typeof GAME_CONFIG];
+  if (!config) {
+    throw new Error(`Invalid game type: ${gameType}`);
+  }
+
+  // Find existing lobby at tier with available slots
+  for (const [lobbyId, lobby] of lobbies.entries()) {
+    if (
+      lobby.gameType === gameType &&
+      lobby.entryTier === entryTier &&
+      lobby.status === 'waiting' &&
+      lobby.players.length < lobby.maxPlayers
+    ) {
+      logActivity(`🔍 Found existing lobby at tier ${entryTier}`, { lobbyId, currentPlayers: lobby.players.length, maxPlayers: lobby.maxPlayers });
+      return lobby;
+    }
+  }
+
+  // Create new lobby at tier
+  const lobbyId = generateLobbyId();
+  const lobby: Lobby = {
+    id: lobbyId,
+    gameType: gameType as any,
+    players: [],
+    maxPlayers: config.maxPlayers,
+    status: 'waiting',
+    createdAt: new Date(),
+    createdBy: 'AUTO_MATCHMAKING',
+    entryTier: entryTier,
+    entryAmount: entryTier, // For backwards compatibility
+    settings: {
+      maxPlayers: config.maxPlayers,
+      entryFee: entryTier,
+      pot: entryTier * config.maxPlayers
+    }
+  };
+
+  lobbies.set(lobbyId, lobby);
+  logActivity(`🏠 Created new lobby at tier ${entryTier}`, {
+    lobbyId,
+    gameType,
+    minPlayers: config.minPlayers,
+    maxPlayers: config.maxPlayers,
+    entryTier
+  });
+
+  // Setup timeout for minimum players
+  setupLobbyTimeout(lobbyId);
+
+  broadcastLobbyListUpdate();
+  return lobby;
+}
+
+// NEW: Auto-matchmaking endpoint (tier-based)
+app.post('/find-or-join-lobby', (req: Request, res: Response) => {
+  const { gameType, entryTier } = req.body;
+
+  if (!gameType || typeof entryTier !== 'number') {
+    return res.status(400).json({
+      error: 'gameType and entryTier are required'
+    });
+  }
+
+  if (!ENTRY_FEE_TIERS.includes(entryTier)) {
+    return res.status(400).json({
+      error: `Invalid entry tier. Must be one of: ${ENTRY_FEE_TIERS.join(', ')}`,
+      validTiers: ENTRY_FEE_TIERS
+    });
+  }
+
+  try {
+    const lobby = findOrCreateLobby(gameType, entryTier);
+    
+    res.json({
+      success: true,
+      lobby: {
+        id: lobby.id,
+        gameType: lobby.gameType,
+        entryTier: lobby.entryTier,
+        maxPlayers: lobby.maxPlayers,
+        currentPlayers: lobby.players.length,
+        status: lobby.status,
+        pot: lobby.entryTier * lobby.maxPlayers
+      }
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      error: error.message || 'Failed to find or create lobby'
+    });
+  }
+});
+
 app.post('/create-lobby', (req: Request, res: Response) => {
     const { gameType, maxPlayers, entryAmount } = req.body;
   
     // ✅ Default allowed games (you can add more)
-    const VALID_GAMES = ['sol-bird', 'connect4', 'slither', 'agar', 'coinflip', 'flappybird'];
+    const VALID_GAMES = ['sol-bird', 'sol-bird-race', 'connect4', 'slither', 'agar', 'coinflip', 'flappybird'];
   
     // ✅ If someone sends "flappybird", automatically map it to internal ID
     const normalizedGameType =
-      gameType === 'flappybird' ? 'sol-bird' : gameType;
+      gameType === 'flappybird' ? 'sol-bird-race' : gameType;
   
     // ✅ Validate input
-    if (!normalizedGameType || !VALID_GAMES.includes(gameType)) {
+    if (!normalizedGameType || !VALID_GAMES.includes(normalizedGameType)) {
       return res.status(400).json({
         error: `Invalid gameType. Must be one of: ${VALID_GAMES.join(', ')}`
       });
     }
 
-    // ✅ Enforce SolBird 1v1 rules
+    // ✅ Enforce SolBird rules
     let finalMaxPlayers;
     if (normalizedGameType === 'sol-bird') {
       if (maxPlayers && maxPlayers > 2) {
@@ -1089,6 +1593,18 @@ app.post('/create-lobby', (req: Request, res: Response) => {
         });
       }
       finalMaxPlayers = 2; // Force 1v1 for sol-bird
+    } else if (normalizedGameType === 'sol-bird-race') {
+      // Sol Bird: Race Royale — allow 2–8 players
+      const requested = typeof maxPlayers === 'number' ? maxPlayers : 2;
+      if (requested < 2 || requested > 8) {
+        return res.status(400).json({
+          error: 'Sol Bird: Race Royale must have between 2 and 8 players.',
+          gameType: 'sol-bird-race',
+          minPlayers: 2,
+          maxPlayersAllowed: 8
+        });
+      }
+      finalMaxPlayers = requested;
     } else {
       finalMaxPlayers = maxPlayers && maxPlayers >= 2 && maxPlayers <= 50 ? maxPlayers : 2;
     }
@@ -1104,7 +1620,14 @@ app.post('/create-lobby', (req: Request, res: Response) => {
       status: 'waiting',
       createdAt: new Date(),
       createdBy: 'API',
-      entryAmount: finalEntryAmount
+      entryAmount: finalEntryAmount,
+      settings: normalizedGameType === 'sol-bird-race'
+        ? {
+            maxPlayers: finalMaxPlayers,
+            entryFee: finalEntryAmount || 0,
+            pot: (finalEntryAmount || 0) * finalMaxPlayers
+          }
+        : undefined
     };
   
     lobbies.set(lobbyId, lobby);
@@ -1357,6 +1880,7 @@ app.post('/start-match', async (req: Request, res: Response) => {
     const match: Match = {
       matchKey,
       lobbyId,
+      gameType: lobby.gameType,
       players: lobby.players.map(p => ({
         playerId: p.id,
         socketId: p.socketId,
@@ -1367,7 +1891,11 @@ app.post('/start-match', async (req: Request, res: Response) => {
       state: 'in-progress',
       lastState: null,
       sockets: new Map(),
-      playerAlive: new Map(lobby.players.map(p => [p.id, true]))
+      playerAlive: new Map(lobby.players.map(p => [p.id, true])),
+      coins: lobby.gameType === 'sol-bird-race' ? new Map() : undefined,
+      roundEndsAt: lobby.gameType === 'sol-bird-race'
+        ? Date.now() + 180000 // 3 minutes
+        : undefined
     };
     matches.set(matchKey, match);
     console.log('[MATCHMAKER] matchStarted', matchKey, match.players.map(p => p.playerId));
@@ -1532,6 +2060,218 @@ app.post('/start-match', async (req: Request, res: Response) => {
 // WebSocket server for game sync
 const wss = new WebSocketServer({ noServer: true });
 
+// Helper: Calculate Top 3 payouts (75% / 10% / 5% to players, 10% house rake)
+// Total: 75% + 10% + 5% + 10% = 100%
+function calculateTop3Payouts(pot: number) {
+  const playerPot = pot * 0.90; // 90% to players
+  const houseRake = pot * 0.10; // 10% house rake
+  
+  return {
+    first: playerPot * (75/90),   // 75% of total pot
+    second: playerPot * (10/90),   // 10% of total pot
+    third: playerPot * (5/90),    // 5% of total pot
+    houseRake: houseRake,         // 10% house rake
+    // Rest get 0%
+  };
+}
+
+// Helper: finalize Sol Bird: Race Royale match
+// NEW: Game ends when all players finish (first to finish = winner)
+// NEW: Top 3 payouts (75% / 10% / 5%)
+async function finalizeRaceMatch(matchKey: string) {
+  const match = matches.get(matchKey);
+  if (!match || match.state === 'ended' || match.gameType !== 'sol-bird-race') return;
+
+  const lobby = lobbies.get(match.lobbyId);
+  const coinsMap = match.coins || new Map<string, number>();
+  
+  // Track finish order (who reached end first)
+  // For now, use coins as proxy (will be replaced with actual finish order from Godot)
+  const finishOrder: Array<{ playerId: string; coins: number; finishTime?: number; isBot?: boolean }> = [];
+  coinsMap.forEach((coins, playerId) => {
+    // Check if player is a bot
+    const player = match.players.find(p => p.playerId === playerId);
+    const isBot = lobby?.players.find(p => p.id === playerId)?.isBot || false;
+    finishOrder.push({ playerId, coins, isBot });
+  });
+  
+  // Sort by coins (descending) - highest = first to finish
+  finishOrder.sort((a, b) => b.coins - a.coins);
+
+  // Apply bot win rate logic
+  const totalPlayers = match.players.length;
+  const isSmallLobby = totalPlayers <= BOT_CONFIG.smallLobbyThreshold;
+  const botWinRate = isSmallLobby ? BOT_CONFIG.winRates.small : BOT_CONFIG.winRates.large;
+  
+  // Check if any bots are in top 3
+  const top3Bots = finishOrder.slice(0, 3).filter(p => p.isBot);
+  
+  // Apply bot win rate: if random roll < botWinRate, let a bot win (if bots are in top 3)
+  if (top3Bots.length > 0) {
+    const randomRoll = Math.random();
+    if (randomRoll < botWinRate) {
+      // Bot wins - swap positions to put a bot in 1st place
+      const botToWin = top3Bots[0];
+      const currentFirst = finishOrder[0];
+      
+      // Swap bot to first place
+      const botIndex = finishOrder.findIndex(p => p.playerId === botToWin.playerId);
+      if (botIndex > 0) {
+        [finishOrder[0], finishOrder[botIndex]] = [finishOrder[botIndex], finishOrder[0]];
+        logActivity(`🤖 Bot win applied (${(botWinRate * 100).toFixed(0)}% rate)`, {
+          matchKey,
+          botId: botToWin.playerId,
+          lobbySize: totalPlayers,
+          winRate: botWinRate
+        });
+      }
+    }
+  }
+
+  // Get Top 3
+  const firstPlace = finishOrder[0];
+  const secondPlace = finishOrder[1];
+  const thirdPlace = finishOrder[2];
+
+  const entryTier = lobby?.entryTier || lobby?.entryAmount || 0;
+  const pot = entryTier * match.players.length;
+
+  match.state = 'ended';
+
+  const payouts = calculateTop3Payouts(pot);
+
+  // Broadcast GAME_END with Top 3 rankings
+  broadcastToMatch(matchKey, {
+    type: 'GAME_END',
+    rankings: [
+      { playerId: firstPlace?.playerId, position: 1, payout: payouts.first },
+      secondPlace ? { playerId: secondPlace.playerId, position: 2, payout: payouts.second } : null,
+      thirdPlace ? { playerId: thirdPlace.playerId, position: 3, payout: payouts.third } : null,
+    ].filter(Boolean),
+    pot,
+    houseRake: payouts.houseRake, // 10% house rake
+  });
+
+  logActivity('🏁 Race Royale match ended', {
+    matchKey,
+    lobbyId: match.lobbyId,
+    gameType: match.gameType,
+    firstPlace: firstPlace?.playerId,
+    secondPlace: secondPlace?.playerId,
+    thirdPlace: thirdPlace?.playerId,
+    pot,
+    payouts,
+  });
+
+  // Send payouts directly via Solana (immediate transfers)
+  if (lobby && pot > 0 && escrowKeypair) {
+    const payoutResults: Array<{ player: string; amount: number; signature: string | null }> = [];
+
+    // Send to 1st place (or bot wallet if bot wins)
+    if (firstPlace?.playerId) {
+      const firstPlayer = match.players.find(p => p.playerId === firstPlace.playerId);
+      const isBot = firstPlace.isBot || lobby?.players.find(p => p.id === firstPlace.playerId)?.isBot || false;
+      
+      if (isBot && payouts.first > 0) {
+        // Bot wins - send to bot wallet (house keeps it)
+        fundBotWallet(payouts.first);
+        payoutResults.push({ player: '1st (BOT)', amount: payouts.first, signature: 'BOT_WALLET' });
+        logActivity(`🤖 Bot won 1st place - payout to bot wallet`, {
+          botId: firstPlace.playerId,
+          amount: payouts.first
+        });
+      } else if (firstPlayer?.wallet && payouts.first > 0) {
+        // Real player wins
+        const sig = await sendPayout(firstPlayer.wallet, payouts.first);
+        payoutResults.push({ player: '1st', amount: payouts.first, signature: sig });
+      }
+    }
+
+    // Send to 2nd place (or bot wallet if bot wins)
+    if (secondPlace?.playerId) {
+      const secondPlayer = match.players.find(p => p.playerId === secondPlace.playerId);
+      const isBot = secondPlace.isBot || lobby?.players.find(p => p.id === secondPlace.playerId)?.isBot || false;
+      
+      if (isBot && payouts.second > 0) {
+        // Bot wins - send to bot wallet (house keeps it)
+        fundBotWallet(payouts.second);
+        payoutResults.push({ player: '2nd (BOT)', amount: payouts.second, signature: 'BOT_WALLET' });
+        logActivity(`🤖 Bot won 2nd place - payout to bot wallet`, {
+          botId: secondPlace.playerId,
+          amount: payouts.second
+        });
+      } else if (secondPlayer?.wallet && payouts.second > 0) {
+        // Real player wins
+        const sig = await sendPayout(secondPlayer.wallet, payouts.second);
+        payoutResults.push({ player: '2nd', amount: payouts.second, signature: sig });
+      }
+    }
+
+    // Send to 3rd place (or bot wallet if bot wins)
+    if (thirdPlace?.playerId) {
+      const thirdPlayer = match.players.find(p => p.playerId === thirdPlace.playerId);
+      const isBot = thirdPlace.isBot || lobby?.players.find(p => p.id === thirdPlace.playerId)?.isBot || false;
+      
+      if (isBot && payouts.third > 0) {
+        // Bot wins - send to bot wallet (house keeps it)
+        fundBotWallet(payouts.third);
+        payoutResults.push({ player: '3rd (BOT)', amount: payouts.third, signature: 'BOT_WALLET' });
+        logActivity(`🤖 Bot won 3rd place - payout to bot wallet`, {
+          botId: thirdPlace.playerId,
+          amount: payouts.third
+        });
+      } else if (thirdPlayer?.wallet && payouts.third > 0) {
+        // Real player wins
+        const sig = await sendPayout(thirdPlayer.wallet, payouts.third);
+        payoutResults.push({ player: '3rd', amount: payouts.third, signature: sig });
+      }
+    }
+
+    // Send house rake to your wallet (IMMEDIATE - every match)
+    if (payouts.houseRake > 0) {
+      const houseSig = await sendHouseRake(payouts.houseRake);
+      payoutResults.push({ player: 'HOUSE', amount: payouts.houseRake, signature: houseSig });
+      console.log(`💰 House rake (10%) sent immediately: ${payouts.houseRake} SOL to ${getHouseWalletAddress()}`);
+      
+      // Replenish bot wallet from house rake if needed
+      replenishBotWalletIfNeeded();
+    }
+
+    logActivity('💰 All payouts sent', {
+      lobbyId: lobby.id,
+      pot,
+      payouts: payoutResults,
+    });
+
+    // Also log to Supabase if available (for record keeping)
+    const db = getSupabaseClient();
+    if (db) {
+      try {
+        await db.rpc('log_payout', {
+          lobby_id: lobby.id,
+          first_place_wallet: match.players.find(p => p.playerId === firstPlace?.playerId)?.wallet,
+          first_place_payout: payouts.first,
+          second_place_wallet: secondPlace ? match.players.find(p => p.playerId === secondPlace.playerId)?.wallet : null,
+          second_place_payout: secondPlace ? payouts.second : 0,
+          third_place_wallet: thirdPlace ? match.players.find(p => p.playerId === thirdPlace.playerId)?.wallet : null,
+          third_place_payout: thirdPlace ? payouts.third : 0,
+          house_rake: payouts.houseRake,
+          pot_amount: pot,
+        } as any);
+      } catch (rpcError) {
+        // Non-critical - just logging
+        console.warn('[MATCHMAKER] Could not log payout to Supabase:', rpcError);
+      }
+    }
+  }
+
+  // Cleanup match after delay
+  setTimeout(() => {
+    matches.delete(matchKey);
+    console.log('[MATCHMAKER] 🗑️ Cleaned up race match:', matchKey);
+  }, 60000);
+}
+
 // Handle HTTP upgrade to WebSocket
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
@@ -1570,7 +2310,33 @@ wss.on('connection', (ws: WebSocket & { matchKey?: string; playerId?: string }, 
         
         // Send confirmation
         ws.send(JSON.stringify({ type: 'init_ack', matchKey, playerId }));
-        
+
+        // For Sol Bird: Race Royale, send GAME_START payload with lobby settings
+        if (match.gameType === 'sol-bird-race') {
+          const lobby = lobbies.get(match.lobbyId);
+          const settings = lobby?.settings;
+          const roundTimer = 180000; // 3 minutes
+
+          ws.send(
+            JSON.stringify({
+              type: 'GAME_START',
+              lobbyId: match.lobbyId,
+              playerId,
+              maxPlayers: settings?.maxPlayers || lobby?.maxPlayers,
+              entryFee: settings?.entryFee ?? lobby?.entryAmount ?? 0,
+              pot: settings?.pot ?? (lobby?.entryAmount || 0) * (lobby?.maxPlayers || match.players.length),
+              roundTimer,
+            })
+          );
+
+          // Ensure timer is scheduled once
+          if (match.roundEndsAt && match.roundEndsAt > Date.now()) {
+            const delay = match.roundEndsAt - Date.now();
+            setTimeout(() => {
+              finalizeRaceMatch(matchKey);
+            }, delay);
+          }
+        }
       } else if (data.type === 'input') {
         const { matchKey, playerId, action } = data;
         
@@ -1592,6 +2358,15 @@ wss.on('connection', (ws: WebSocket & { matchKey?: string; playerId?: string }, 
         
         const match = matches.get(matchKey);
         if (!match) return;
+
+        // In Race Royale, death is a respawn event – do not eliminate players
+        if (match.gameType === 'sol-bird-race') {
+          console.log('[MATCHMAKER] 💀 Player death in race (ignored for elimination):', {
+            matchKey,
+            playerId,
+          });
+          return;
+        }
         
         match.playerAlive.set(playerId, false);
         console.log('[MATCHMAKER] 💀 Player died:', { matchKey, playerId });
@@ -1624,6 +2399,26 @@ wss.on('connection', (ws: WebSocket & { matchKey?: string; playerId?: string }, 
             console.log('[MATCHMAKER] 🗑️ Cleaned up match:', matchKey);
           }, 60000);
         }
+      } else if (data.type === 'COIN_UPDATE') {
+        const { matchKey, playerId, coins } = data;
+
+        const match = matches.get(matchKey);
+        if (!match || match.gameType !== 'sol-bird-race') return;
+
+        if (!match.coins) {
+          match.coins = new Map<string, number>();
+        }
+
+        const numericCoins = typeof coins === 'number' ? coins : parseInt(coins || '0', 10) || 0;
+        match.coins.set(playerId, numericCoins);
+
+        // Broadcast PLAYER_UPDATE to all players in the match
+        broadcastToMatch(matchKey, {
+          type: 'PLAYER_UPDATE',
+          playerId,
+          coins: numericCoins,
+          timestamp: Date.now(),
+        });
       }
     } catch (error) {
       console.error('[MATCHMAKER] ❌ WebSocket message error:', error);
@@ -1670,6 +2465,9 @@ async function bootstrap() {
       console.warn('⚠️ Escrow wallet initialization failed, continuing:', error?.message || error);
     });
 
+    // Initialize bot wallet
+    initializeBotWallet();
+
     // Auto-port fallback: try ports 3001-3011
     const basePort = parseInt(process.env.PORT || '3001', 10);
     const maxRetries = 10;
@@ -1707,6 +2505,8 @@ async function bootstrap() {
             console.log(`✅ Matchmaker running on http://localhost:${currentPort}`);
             console.log('✅ SolBird enforced as 1v1 (maxPlayers=2)');
             console.log(`🎮 Supported games: ${VALID_GAMES.join(', ')}`);
+            console.log(`🤖 Bot system enabled: max entry ${BOT_CONFIG.maxEntryFee} SOL, win rates: ${(BOT_CONFIG.winRates.small * 100).toFixed(0)}% (small) / ${(BOT_CONFIG.winRates.large * 100).toFixed(0)}% (large)`);
+            console.log(`💰 Bot wallet balance: ${getBotWalletBalance().toFixed(2)} SOL`);
             
             serverStarted = true;
             resolve();
@@ -1750,3 +2550,4 @@ async function bootstrap() {
 bootstrap();
 
 export { io, app, server };
+
