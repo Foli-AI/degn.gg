@@ -33,16 +33,46 @@ if (typeof window !== 'undefined') {
     ? MATCHMAKER_URL
     : `https://${MATCHMAKER_URL}`;
   
+  // First, test if backend is reachable via HTTP
+  const testBackendHealth = async () => {
+    try {
+      const healthUrl = `${socketUrl}/health`;
+      const response = await fetch(healthUrl, { 
+        method: 'GET',
+        signal: AbortSignal.timeout(5000) // 5 second timeout
+      });
+      if (response.ok) {
+        console.log('[Socket] ✅ Backend health check passed');
+        return true;
+      } else {
+        console.warn('[Socket] ⚠️ Backend health check failed:', response.status);
+        return false;
+      }
+    } catch (error) {
+      console.error('[Socket] ❌ Backend health check failed:', error);
+      return false;
+    }
+  };
+  
+  // Test backend before connecting socket
+  testBackendHealth().then((isHealthy) => {
+    if (!isHealthy) {
+      console.error('[Socket] ⚠️ Backend appears to be down or unreachable. Socket connection may fail.');
+    }
+  });
+  
   socket = io(socketUrl, { 
-    transports: ["websocket", "polling"], // Fallback to polling if websocket fails
+    transports: ["polling", "websocket"], // Try polling first (more reliable on Render)
     withCredentials: false, // Disable credentials for Render
     reconnection: true,
-    reconnectionDelay: 2000, // Increased delay
-    reconnectionAttempts: 3, // Reduced attempts to prevent infinite loops
-    reconnectionDelayMax: 10000,
-    timeout: 10000, // Reduced timeout
+    reconnectionDelay: 3000, // Increased delay
+    reconnectionAttempts: 5, // Allow more attempts for Render
+    reconnectionDelayMax: 15000,
+    timeout: 20000, // Increased timeout for Render
     forceNew: false,
-    autoConnect: false // Don't auto-connect, let useMatchmaker handle it
+    autoConnect: false, // Don't auto-connect, let useMatchmaker handle it
+    upgrade: true, // Allow transport upgrades
+    rememberUpgrade: true // Remember transport upgrade
   });
 
   // Add connection error logging
