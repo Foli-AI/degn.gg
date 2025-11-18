@@ -112,28 +112,33 @@ const BOT_WALLET_MIN_BALANCE = 5; // Minimum balance to maintain (5 SOL)
 const BOT_WALLET_INITIAL_FUND = 10; // Initial fund from house rake (10 SOL)
 
 // Configure CORS for Socket.IO
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "https://degn-gg.vercel.app",
-  process.env.FRONTEND_URL,
-  process.env.NEXT_PUBLIC_FRONTEND_URL
-].filter(Boolean) as string[];
+// In production, allow all origins (Render/Vercel handles security)
+// In development, use specific origins
+const corsOrigin: string[] | boolean = process.env.NODE_ENV === 'production' 
+  ? true // Allow all origins in production
+  : [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://degn-gg.vercel.app",
+      process.env.FRONTEND_URL,
+      process.env.NEXT_PUBLIC_FRONTEND_URL
+    ].filter((origin): origin is string => typeof origin === 'string');
 
 const io = new SocketIOServer(server, {
   cors: {
-    origin: allowedOrigins.length > 0 ? allowedOrigins : ["http://localhost:3000", "https://degn-gg.vercel.app"],
+    origin: corsOrigin,
     methods: ["GET", "POST"],
-    credentials: true,
+    credentials: false, // Disable credentials for Render compatibility
     allowedHeaders: ["*"]
   },
-  transports: ["websocket", "polling"]
+  transports: ["websocket", "polling"],
+  allowEIO3: true // Allow Engine.IO v3 clients
 });
 
 // Middleware - CORS for HTTP requests
 app.use(cors({
-  origin: allowedOrigins.length > 0 ? allowedOrigins : ["http://localhost:3000", "https://degn-gg.vercel.app"],
-  credentials: true,
+  origin: corsOrigin,
+  credentials: false, // Disable credentials for Render compatibility
   methods: ["GET", "POST", "PUT", "OPTIONS"],
   allowedHeaders: ["*"]
 }));

@@ -536,19 +536,32 @@ export function useMatchmaker() {
     };
   }, []);
 
-  // Auto-connect on mount
+  // Auto-connect on mount (only once)
   useEffect(() => {
-    if (state.status === 'disconnected') {
-      // Try to connect if socket is not connected
-      if (socket && !socket.connected) {
-        console.log('[useMatchmaker] Auto-connecting to matchmaker...');
-        connect();
-      } else if (socket && socket.connected) {
-        // Socket is already connected, trigger connect handler
-        setState(prev => ({ ...prev, status: 'connected' }));
+    if (!socket) return;
+    
+    // Only auto-connect if we're disconnected AND socket is not connected
+    if (state.status === 'disconnected' && !socket.connected && !socket.connecting) {
+      console.log('[useMatchmaker] Auto-connecting to matchmaker...');
+      
+      // Manually connect the socket first
+      if (!socket.connected) {
+        socket.connect();
       }
+      
+      // Then call connect after a short delay
+      const timer = setTimeout(() => {
+        if (socket && socket.connected) {
+          connect();
+        }
+      }, 500);
+      
+      return () => clearTimeout(timer);
+    } else if (socket && socket.connected && state.status === 'disconnected') {
+      // Socket is already connected, just update status
+      setState(prev => ({ ...prev, status: 'connected' }));
     }
-  }, [state.status, connect]);
+  }, []); // Only run once on mount
 
   return {
     ...state,

@@ -25,19 +25,30 @@ let socket: ReturnType<typeof io> | null = null;
 
 if (typeof window !== 'undefined') {
   const MATCHMAKER_URL = getMatchmakerUrl();
-  socket = io(MATCHMAKER_URL, { 
+  
+  // For Render.com, ensure we're using the correct protocol
+  const socketUrl = MATCHMAKER_URL.startsWith('https://') 
+    ? MATCHMAKER_URL 
+    : MATCHMAKER_URL.startsWith('http://')
+    ? MATCHMAKER_URL
+    : `https://${MATCHMAKER_URL}`;
+  
+  socket = io(socketUrl, { 
     transports: ["websocket", "polling"], // Fallback to polling if websocket fails
-    withCredentials: true,
+    withCredentials: false, // Disable credentials for Render
     reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionAttempts: 5,
-    timeout: 20000
+    reconnectionDelay: 2000, // Increased delay
+    reconnectionAttempts: 3, // Reduced attempts to prevent infinite loops
+    reconnectionDelayMax: 10000,
+    timeout: 10000, // Reduced timeout
+    forceNew: false,
+    autoConnect: false // Don't auto-connect, let useMatchmaker handle it
   });
 
   // Add connection error logging
   socket.on("connect_error", (error) => {
     console.error("[Socket] Connection error:", error.message);
-    console.error("[Socket] Attempting to connect to:", MATCHMAKER_URL);
+    console.error("[Socket] Attempting to connect to:", socketUrl);
   });
 
   socket.on("connect", () => {
@@ -46,6 +57,14 @@ if (typeof window !== 'undefined') {
 
   socket.on("disconnect", (reason) => {
     console.warn("[Socket] Disconnected:", reason);
+  });
+
+  socket.on("reconnect_attempt", (attemptNumber) => {
+    console.log(`[Socket] Reconnection attempt ${attemptNumber}`);
+  });
+
+  socket.on("reconnect_failed", () => {
+    console.error("[Socket] ❌ Reconnection failed after all attempts");
   });
 }
 
