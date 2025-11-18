@@ -1610,6 +1610,11 @@ app.post('/create-lobby', (req: Request, res: Response) => {
     }
   
     const finalEntryAmount = entryAmount && entryAmount >= 0 ? entryAmount : undefined;
+    
+    // Calculate entryTier from entryAmount (round to nearest tier)
+    const entryTier = finalEntryAmount 
+      ? ENTRY_FEE_TIERS.find(tier => tier >= finalEntryAmount) || ENTRY_FEE_TIERS[ENTRY_FEE_TIERS.length - 1]
+      : ENTRY_FEE_TIERS[0]; // Default to lowest tier if no amount specified
   
     const lobbyId = generateLobbyId();
     const lobby: Lobby = {
@@ -1620,6 +1625,7 @@ app.post('/create-lobby', (req: Request, res: Response) => {
       status: 'waiting',
       createdAt: new Date(),
       createdBy: 'API',
+      entryTier: entryTier,
       entryAmount: finalEntryAmount,
       settings: normalizedGameType === 'sol-bird-race'
         ? {
