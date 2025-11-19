@@ -15,7 +15,9 @@ The `match_bridge.gd` file in your Godot project is missing the fixes:
 
 ## Solution: Replace Entire match_bridge.gd File
 
-**Open file:** `res://autoload/match_bridge.gd` in Godot Editor
+**Open file:** `res://net/match_bridge.gd` in Godot Editor
+
+**Note:** The file path doesn't matter if it's registered as an autoload in Project Settings. If it's at `res://net/match_bridge.gd`, that's fine - just open that file.
 
 **REPLACE THE ENTIRE FILE with this:**
 
