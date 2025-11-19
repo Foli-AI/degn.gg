@@ -742,6 +742,31 @@ function startGame(lobbyId: string) {
   const matchKey = `${lobbyId}_${Date.now()}`;
   console.log('[MATCHMAKER] Generated matchId:', matchId, 'matchKey:', matchKey);
 
+  // Create match object in memory BEFORE sending game:start event
+  // This ensures the match exists when ws-glue.js connects
+  const match: Match = {
+    matchKey,
+    lobbyId,
+    gameType: lobby.gameType,
+    players: lobby.players.map(p => ({
+      playerId: p.id,
+      socketId: p.socketId,
+      wallet: p.walletAddress,
+      username: p.username
+    })),
+    createdAt: Date.now(),
+    state: 'in-progress',
+    lastState: null,
+    sockets: new Map(),
+    playerAlive: new Map(lobby.players.map(p => [p.id, true])),
+    coins: lobby.gameType === 'sol-bird-race' ? new Map() : undefined,
+    roundEndsAt: lobby.gameType === 'sol-bird-race'
+      ? Date.now() + 180000 // 3 minutes
+      : undefined
+  };
+  matches.set(matchKey, match);
+  console.log('[MATCHMAKER] ✅ Match created:', matchKey, match.players.map(p => p.playerId));
+
   // Broadcast game start to all players (include matchKey!)
   lobby.players.forEach(player => {
     io.to(player.socketId).emit('game:start', {
