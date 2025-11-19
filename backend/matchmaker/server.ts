@@ -1918,6 +1918,24 @@ app.post('/start-match', async (req: Request, res: Response) => {
     // This ensures match is created before game:start event is sent
     startGame(lobbyId);
 
+    // Get the matchKey from the match that was just created
+    // Find the match by lobbyId (matchKey format is ${lobbyId}_${timestamp})
+    let matchKey: string | undefined;
+    let matchId: string | undefined;
+    for (const [key, match] of matches.entries()) {
+      if (match.lobbyId === lobbyId && match.state === 'in-progress') {
+        matchKey = key;
+        // Extract matchId from matchKey or generate one
+        matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        break;
+      }
+    }
+
+    if (!matchKey) {
+      console.error('[MATCHMAKER] ❌ Could not find matchKey for lobby:', lobbyId);
+      return res.status(500).json({ error: 'Failed to create match' });
+    }
+
     // Create game session in Supabase
     if (db) {
       try {
@@ -1932,7 +1950,7 @@ app.post('/start-match', async (req: Request, res: Response) => {
         const { data: gameSession, error: sessionError } = await db
           .from('game_sessions')
           .insert({
-            id: matchId,
+            id: matchId!,
             lobby_id: lobbyId,
             game_type: lobby.gameType,
             status: 'in_progress',
