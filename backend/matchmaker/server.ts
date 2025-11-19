@@ -737,10 +737,16 @@ function startGame(lobbyId: string) {
     settings: lobby.settings
   });
 
-  // Broadcast game start to all players
+  // Generate match ID and matchKey BEFORE broadcasting
+  const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const matchKey = `${lobbyId}_${Date.now()}`;
+  console.log('[MATCHMAKER] Generated matchId:', matchId, 'matchKey:', matchKey);
+
+  // Broadcast game start to all players (include matchKey!)
   lobby.players.forEach(player => {
     io.to(player.socketId).emit('game:start', {
       lobbyId,
+      matchKey, // Include matchKey so frontend can use it
       gameType: lobby.gameType,
       players: lobby.players,
       entryAmount: lobby.entryAmount,
@@ -752,6 +758,7 @@ function startGame(lobbyId: string) {
   // Also broadcast to the lobby room
   io.to(lobbyId).emit('game:start', {
     lobbyId,
+    matchKey, // Include matchKey so frontend can use it
     gameType: lobby.gameType,
     players: lobby.players,
     entryAmount: lobby.entryAmount,
@@ -1882,12 +1889,12 @@ app.post('/start-match', async (req: Request, res: Response) => {
       playerCount: lobby.players.length
     });
 
-    // Generate match ID and matchKey
+    // Generate match ID and matchKey FIRST (before sending game:start event)
     const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const matchKey = `${lobbyId}_${Date.now()}`;
     console.log('[MATCHMAKER] Generated matchId:', matchId, 'matchKey:', matchKey);
 
-    // Create match object in memory
+    // Create match object in memory FIRST (before sending game:start event)
     const match: Match = {
       matchKey,
       lobbyId,

@@ -483,13 +483,15 @@ export function useMatchmaker() {
         const route = gameRoutes[data.gameType] || `/game/${data.lobbyId}`;
         
         // Build query params
+        // Use matchKey from backend if provided, otherwise fallback to lobbyId
+        const matchKey = (data as any).matchKey || data.lobbyId;
         const params = new URLSearchParams({
           lobbyId: data.lobbyId,
           playerId: data.players.find(p => p.id === socket?.id)?.id || data.players[0]?.id || '',
           username: data.players.find(p => p.id === socket?.id)?.username || data.players[0]?.username || 'Player',
           entry: String(data.entryAmount || 0),
           players: String(data.players.length),
-          matchKey: data.lobbyId
+          matchKey: matchKey // Use matchKey from backend event
         });
         
         const url = `${route}?${params.toString()}`;
