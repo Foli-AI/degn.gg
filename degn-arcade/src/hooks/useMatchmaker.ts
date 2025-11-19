@@ -440,6 +440,9 @@ export function useMatchmaker() {
       console.log('🚀 Lobby ready, game starting soon...', data);
     };
 
+    // Guard to prevent multiple redirects (use ref to persist across renders)
+    const redirectGuardRef = { current: false };
+    
     const handleGameStart = (data: { 
       lobbyId: string; 
       gameType: string; 
@@ -448,12 +451,26 @@ export function useMatchmaker() {
       maxPlayers: number;
       startTime: number;
     }) => {
+      // Prevent multiple redirects
+      if (redirectGuardRef.current) {
+        console.log('⚠️ Already redirecting, ignoring duplicate game-start event');
+        return;
+      }
+      
+      // Prevent redirect if already on game page
+      if (typeof window !== 'undefined' && window.location.pathname.includes('/play/')) {
+        console.log('⚠️ Already on game page, ignoring redirect');
+        return;
+      }
+      
       setState(prev => ({ ...prev, status: 'in-game' }));
       
       console.log('🎮 Game starting! Redirecting to game...', data);
       
       // Redirect to game page based on game type
       if (typeof window !== 'undefined') {
+        redirectGuardRef.current = true;
+        
         const gameRoutes: Record<string, string> = {
           'sol-bird': '/play/sol-bird',
           'sol-bird-race': '/play/sol-bird',
@@ -464,15 +481,24 @@ export function useMatchmaker() {
         };
         
         const route = gameRoutes[data.gameType] || `/game/${data.lobbyId}`;
-        const url = `${route}?lobbyId=${data.lobbyId}&players=${data.players.length}&entry=${data.entryAmount || 0}`;
         
-        // Use router if available, otherwise direct navigation
-        if (window.location.pathname.includes('/find-game')) {
+        // Build query params
+        const params = new URLSearchParams({
+          lobbyId: data.lobbyId,
+          playerId: data.players.find(p => p.id === socket?.id)?.id || data.players[0]?.id || '',
+          username: data.players.find(p => p.id === socket?.id)?.username || data.players[0]?.username || 'Player',
+          entry: String(data.entryAmount || 0),
+          players: String(data.players.length),
+          matchKey: data.lobbyId
+        });
+        
+        const url = `${route}?${params.toString()}`;
+        
+        // Always use same-window navigation (no new tabs)
+        // Small delay to ensure state is updated
+        setTimeout(() => {
           window.location.href = url;
-        } else {
-          // Open in new tab if not on find-game page
-          window.open(url, '_blank');
-        }
+        }, 100);
       }
     };
 
@@ -488,6 +514,12 @@ export function useMatchmaker() {
     };
 
     const handleMatchStart = (data: any) => {
+      // match-start is an alias for game:start, let handleGameStart handle it
+      // This prevents duplicate redirects
+      console.log('📡 Received match-start event (delegating to handleGameStart)');
+      if (data && typeof data === 'object') {
+        handleGameStart(data as any);
+      }
       setState(prev => ({ ...prev, status: 'in-game' }));
     };
 
