@@ -1914,34 +1914,9 @@ app.post('/start-match', async (req: Request, res: Response) => {
       playerCount: lobby.players.length
     });
 
-    // Generate match ID and matchKey FIRST (before sending game:start event)
-    const matchId = `match_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const matchKey = `${lobbyId}_${Date.now()}`;
-    console.log('[MATCHMAKER] Generated matchId:', matchId, 'matchKey:', matchKey);
-
-    // Create match object in memory FIRST (before sending game:start event)
-    const match: Match = {
-      matchKey,
-      lobbyId,
-      gameType: lobby.gameType,
-      players: lobby.players.map(p => ({
-        playerId: p.id,
-        socketId: p.socketId,
-        wallet: p.walletAddress,
-        username: p.username
-      })),
-      createdAt: Date.now(),
-      state: 'in-progress',
-      lastState: null,
-      sockets: new Map(),
-      playerAlive: new Map(lobby.players.map(p => [p.id, true])),
-      coins: lobby.gameType === 'sol-bird-race' ? new Map() : undefined,
-      roundEndsAt: lobby.gameType === 'sol-bird-race'
-        ? Date.now() + 180000 // 3 minutes
-        : undefined
-    };
-    matches.set(matchKey, match);
-    console.log('[MATCHMAKER] matchStarted', matchKey, match.players.map(p => p.playerId));
+    // Use startGame() function to create match and send game:start event
+    // This ensures match is created before game:start event is sent
+    startGame(lobbyId);
 
     // Create game session in Supabase
     if (db) {
