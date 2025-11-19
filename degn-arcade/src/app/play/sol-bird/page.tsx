@@ -36,6 +36,19 @@ function SolBirdPageContent() {
     setLoaded(false);
   }, [clientSrc]);
 
+  // Listen for game end message from iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'GAME_END' && event.data?.redirect) {
+        // Redirect back to lobby after game ends
+        window.location.href = '/';
+      }
+    };
+    
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
 
   return (
     <div style={{height:'100vh', width:'100%', background:'#0b0c10', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column'}}>
