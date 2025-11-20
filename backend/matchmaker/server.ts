@@ -99,7 +99,7 @@ const GAME_CONFIG = {
 const BOT_CONFIG = {
   enabled: true, // Master switch - set to false for real players only
   maxEntryFee: 0.5, // SOL - bots only join ≤ 0.5 SOL lobbies
-  fillWaitTime: 30000, // 30 seconds - wait before adding bots
+  fillWaitTime: 10000, // 10 seconds - wait before adding bots (reduced for faster game starts)
   winRates: {
     small: 0.40, // 40% win rate for ≤ 8 players
     large: 0.55, // 55% win rate for > 8 players
