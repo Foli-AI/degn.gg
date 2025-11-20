@@ -2584,24 +2584,23 @@ wss.on('connection', (ws: WebSocket & { matchKey?: string; playerId?: string }, 
 
           // Keep match players in sync with latest lobby state (bots + real players)
           if (!match.players || match.players.length !== lobbyPlayers.length) {
-            match.players = (lobbyPlayers.length ? lobbyPlayers : match.players).map(p => ({
-              playerId: p.id || p.playerId,
+            match.players = lobbyPlayers.map(p => ({
+              playerId: p.id,
               socketId: p.socketId || '',
-              wallet: p.walletAddress || p.wallet,
+              wallet: p.walletAddress,
               username: p.username || (p.isBot ? 'Bot' : 'Player'),
               isBot: !!p.isBot
             }));
           }
 
-          const sourcePlayers = lobbyPlayers.length ? lobbyPlayers : match.players;
-
           // Include all players (including bots) in GAME_START
-          const allPlayers = sourcePlayers.map(p => ({
-            id: p.id || p.playerId,
-            playerId: p.id || p.playerId,
+          // Use lobbyPlayers (which are Player[]) and normalize to the format needed
+          const allPlayers = lobbyPlayers.map(p => ({
+            id: p.id,
+            playerId: p.id,
             socketId: p.socketId,
             username: p.username || (p.isBot ? 'Bot' : 'Player'),
-            wallet: p.walletAddress || p.wallet,
+            wallet: p.walletAddress,
             isBot: !!p.isBot
           }));
 
