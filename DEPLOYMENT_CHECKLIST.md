@@ -1,74 +1,126 @@
-# ✅ GitHub Deployment Checklist
+# 🚀 DEPLOYMENT CHECKLIST - Sol Bird Fixes
 
-## Files Created/Updated
+## ✅ All Code Changes Complete
 
-✅ `.gitignore` - Updated to include backend/matchmaker
-✅ `backend/matchmaker/.renderignore` - Created for Render deployment
-✅ `backend/matchmaker/render.yaml` - Updated with autoDeploy: true
-✅ `GIT_SETUP_COMMANDS.md` - Complete PowerShell commands
+### Backend Changes (Render)
+1. ✅ GAME_START now includes `players` array with bots
+2. ✅ Added debug logging for GAME_START payload
+3. ✅ Matchmaking prioritizes filling lobbies
+4. ✅ Game starts after 30 seconds OR when full
+5. ✅ Lobby timeout reduced to 30 seconds
 
-## Verification Checklist
+**Files Changed:**
+- `backend/matchmaker/server.ts`
 
-### Backend Matchmaker Files
-- [x] `backend/matchmaker/server.ts` exists
-- [x] `backend/matchmaker/tsconfig.json` exists
-- [x] `backend/matchmaker/package.json` has correct scripts:
-  - `build`: `tsc` ✅
-  - `start`: `node dist/server.js` ✅
-- [x] `backend/matchmaker/render.yaml` configured correctly
-
-### Git Configuration
-- [x] `.gitignore` excludes node_modules but includes backend/
-- [x] `.renderignore` excludes build artifacts
-
-## PowerShell Commands to Run
-
-```powershell
-# 1. Navigate to project root
-cd C:\Users\mojo\Documents\degn
-
-# 2. Initialize Git (if not already)
-if (-not (Test-Path .git)) { git init }
-
-# 3. Check current status
-git status
-
-# 4. Add all files (including backend/matchmaker)
-git add .
-
-# 5. Verify backend/matchmaker is included
-git ls-files | Select-String "backend/matchmaker"
-
-# 6. Commit
-git commit -m "Full project sync"
-
-# 7. Add remote (replace with your GitHub repo URL)
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-# OR if remote exists:
-# git remote set-url origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-
-# 8. Set main branch
-git branch -M main
-
-# 9. Push to GitHub
-git push -u origin main
+**Deploy Command:**
+```bash
+# On Render, redeploy the backend service
+# OR push to git and Render auto-deploys
 ```
 
-## Render Deployment Configuration
+---
 
-The `render.yaml` is configured with:
-- ✅ `buildCommand: npm install && npm run build`
-- ✅ `startCommand: npm start`
-- ✅ `autoDeploy: true`
-- ✅ Root directory: `backend/matchmaker` (set in Render dashboard)
+### Frontend Changes (Vercel)
+1. ✅ Removed mock wallet script
+2. ✅ Added WaitingModal component
+3. ✅ Integrated waiting modal into matchmaker hook
+4. ✅ Socket.IO fallback to Render URL
+5. ✅ Waiting modal shows on lobby join
 
-## Next Steps After Push
+**Files Changed:**
+- `degn-arcade/src/app/layout.tsx` (removed mock wallet)
+- `degn-arcade/src/components/lobby/WaitingModal.tsx` (new)
+- `degn-arcade/src/app/page.tsx` (added modal)
+- `degn-arcade/src/hooks/useMatchmaker.ts` (modal state)
+- `degn-arcade/src/lib/socket.ts` (fallback URL)
 
-1. Go to Render.com dashboard
-2. Create new Web Service
-3. Connect GitHub repository
-4. Set Root Directory to: `backend/matchmaker`
-5. Render will auto-detect `render.yaml` and use it
-6. Set environment variables in Render dashboard
-7. Deploy!
+**Deploy Command:**
+```bash
+cd degn-arcade
+npm run build
+vercel --prod
+```
 
+---
+
+### Game Client Changes (BirdMMO Bundle)
+1. ✅ KeyR blocking (no respawn)
+2. ✅ isAlive prop passed correctly
+3. ✅ entryAmount prop passed to Overlay
+4. ✅ "You Lost X SOL" popup shows when dead
+5. ✅ Added debug logging for GAME_START
+
+**Files Changed:**
+- `degn-arcade/public/games/sol-bird-birdmmo/src/client/Game.jsx`
+- `degn-arcade/public/games/sol-bird-birdmmo/src/client/Player.jsx`
+- `degn-arcade/public/games/sol-bird-birdmmo/src/client/useKeyboard.jsx`
+- `degn-arcade/public/games/sol-bird-birdmmo/src/client/Network.js`
+
+**Bundle Rebuilt:**
+- ✅ `degn-arcade/public/games/sol-bird/client/bundle.js` (updated)
+
+**Note:** Bundle is already copied and will deploy with frontend.
+
+---
+
+## 🔍 What to Check After Deployment
+
+### 1. Backend Logs (Render)
+Look for:
+```
+[MATCHMAKER] 📤 Sending GAME_START via WebSocket: {
+  playersCount: 8,
+  players: [...]
+}
+```
+
+### 2. Frontend Console
+Should see:
+- `[DEGN Network] GAME_START received:` with `hasPlayers: true`
+- `[useDEGNNetwork] Initialized players: 8`
+- NO MORE `/socket.io` 404 errors (if env var is set)
+
+### 3. Game Behavior
+- ✅ Bots/ghost players visible in game
+- ✅ "Alive: X" counter shows correct count
+- ✅ When you die: "ELIMINATED" popup with "Lost X SOL"
+- ✅ No respawn on KeyR
+- ✅ Spectate mode after death
+
+---
+
+## 🐛 If Issues Persist
+
+### No Bots Visible
+1. Check backend logs for `playersCount` in GAME_START
+2. Check frontend console for `[useDEGNNetwork] Initialized players: X`
+3. Verify `players` array has `isBot: true` entries
+
+### Still Can Respawn
+1. Hard refresh browser (Ctrl+Shift+R)
+2. Check console for `[DEGN Network]` logs
+3. Verify bundle.js is latest (check file timestamp)
+
+### Socket.IO 404 Errors
+1. Verify `NEXT_PUBLIC_MATCHMAKER_URL` is set in Vercel env vars
+2. Check `src/lib/socket.ts` has fallback logic
+3. Should see: `[Socket] Using matchmaker URL from env: https://degn-gg-1.onrender.com`
+
+---
+
+## 📝 Quick Test Flow
+
+1. Click "Join Game" → Phantom popup
+2. Confirm transaction
+3. **Waiting modal appears** showing "Waiting for players X/8"
+4. Modal updates as players/bots join
+5. Game starts automatically (30s or when full)
+6. **See bots in game** (multiple birds)
+7. Crash/die → **"ELIMINATED" popup** with "Lost X SOL"
+8. **Cannot respawn** (KeyR blocked)
+9. Spectate until winner
+10. Redirect back to lobby
+
+---
+
+**Status:** ✅ All code ready, needs deployment to take effect.

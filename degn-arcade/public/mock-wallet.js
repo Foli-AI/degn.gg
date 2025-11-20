@@ -192,4 +192,6 @@ window.disconnectMockWallet = () => window.mockWallet.disconnect();
 window.getMockWalletInfo = () => window.mockWallet.getWalletInfo();
 
 console.log('🦄 Mock Wallet initialized. Use connectMockWallet() to connect.');
-console.log('TODO: Replace this with real Phantom wallet integration in production.');
+if (['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+  console.log('TODO: Replace this with real Phantom wallet integration in production.');
+}

@@ -95,7 +95,9 @@ const GAME_CONFIG = {
 } as const;
 
 // ✅ Bot system configuration
+// DISABLED: Set enabled to true to enable bots
 const BOT_CONFIG = {
+  enabled: false, // Master switch - set to false for real players only
   maxEntryFee: 0.5, // SOL - bots only join ≤ 0.5 SOL lobbies
   fillWaitTime: 30000, // 30 seconds - wait before adding bots
   winRates: {
@@ -252,15 +254,18 @@ interface Match {
   matchKey: string;
   lobbyId: string;
   gameType: string;
-  players: Array<{ playerId: string; socketId: string; wallet?: string; username: string }>;
+  players: Array<{ playerId: string; socketId: string; wallet?: string; username: string; isBot?: boolean }>;
   createdAt: number;
   state: 'in-progress' | 'ended';
   lastState: any;
-  sockets: Map<string, WebSocket>; // playerId -> WebSocket
+  sockets: Map<string, WebSocket | any>; // playerId -> WebSocket or Socket.IO socket
   playerAlive: Map<string, boolean>; // playerId -> alive status
   // Race Royale-specific state
   coins?: Map<string, number>; // playerId -> coin count
   roundEndsAt?: number; // timestamp when round should end
+  // BirdMMO-specific state
+  birdmmoClients?: Map<string, { playerId: string; position: { x: number; y: number; z: number }; timestamp: number }>; // socketId -> position data
+  birdmmoBroadcastInterval?: NodeJS.Timeout | null; // Interval for broadcasting clients
 }
 
 const matches = new Map<string, Match>(); // matchKey -> Match
@@ -465,6 +470,11 @@ async function refundAndCancelLobby(lobbyId: string, reason: string) {
 
 // Helper: Add bots to lobby (fill exactly what's needed)
 function addBotsToLobby(lobbyId: string, count: number): number {
+  // Bots disabled - return 0
+  if (!BOT_CONFIG.enabled) {
+    return 0;
+  }
+  
   const lobby = lobbies.get(lobbyId);
   if (!lobby || lobby.status !== 'waiting') return 0;
 
@@ -605,7 +615,7 @@ function setupLobbyTimeout(lobbyId: string) {
 
   const config = GAME_CONFIG[lobby.gameType as keyof typeof GAME_CONFIG];
   const minPlayers = config?.minPlayers || 2;
-  const timeoutMs = 2 * 60 * 1000; // 2 minutes
+  const timeoutMs = 30 * 1000; // 30 seconds
 
   // Clear existing timer if any
   if (lobby.timeoutTimer) {
@@ -638,7 +648,7 @@ function setupLobbyTimeout(lobbyId: string) {
     }
   }, timeoutMs);
 
-  logActivity(`⏱️ Lobby timeout set (2 minutes)`, {
+  logActivity(`⏱️ Lobby timeout set (30 seconds)`, {
     lobbyId,
     minPlayers,
     currentPlayers: lobby.players.length,
@@ -667,8 +677,8 @@ function checkLobbyReady(lobbyId: string) {
       setupLobbyTimeout(lobbyId);
     }
     
-    // Setup bot fill timer for low-tier lobbies (≤ 0.5 SOL)
-    if (lobby.entryTier <= BOT_CONFIG.maxEntryFee && !lobby.botFillTimer) {
+    // Setup bot fill timer for low-tier lobbies (≤ 0.5 SOL) - only if bots enabled
+    if (BOT_CONFIG.enabled && lobby.entryTier <= BOT_CONFIG.maxEntryFee && !lobby.botFillTimer) {
       setupBotFillTimer(lobbyId);
     }
     
@@ -716,10 +726,18 @@ function checkLobbyReady(lobbyId: string) {
 
     broadcastLobbyUpdate(lobbyId);
     
-    // Auto-start game after 3 seconds
-    setTimeout(() => {
-      startGame(lobbyId);
-    }, 3000);
+    // Auto-start game after 30 seconds OR immediately if lobby is full
+    if (totalPlayers >= maxPlayers) {
+      // Lobby is full, start immediately
+      setTimeout(() => {
+        startGame(lobbyId);
+      }, 2000); // 2 second delay for UI updates
+    } else {
+      // Not full yet, wait 30 seconds then start (bots will fill if needed)
+      setTimeout(() => {
+        startGame(lobbyId);
+      }, 30000);
+    }
   }
 }
 
@@ -752,7 +770,8 @@ function startGame(lobbyId: string) {
       playerId: p.id,
       socketId: p.socketId,
       wallet: p.walletAddress,
-      username: p.username
+      username: p.username,
+      isBot: !!p.isBot
     })),
     createdAt: Date.now(),
     state: 'in-progress',
@@ -767,17 +786,40 @@ function startGame(lobbyId: string) {
   matches.set(matchKey, match);
   console.log('[MATCHMAKER] ✅ Match created:', matchKey, match.players.map(p => p.playerId));
 
-  // Broadcast game start to all players (include matchKey!)
+  // Build players array with isBot flags
+  const allPlayers = lobby.players.map(p => ({
+    id: p.id,
+    playerId: p.id,
+    socketId: p.socketId,
+    username: p.username || (p.isBot ? 'Bot' : 'Player'),
+    wallet: p.walletAddress,
+    isBot: !!p.isBot
+  }));
+
+  // Broadcast game start to all players via Socket.IO (include matchKey and players array!)
   lobby.players.forEach(player => {
-    io.to(player.socketId).emit('game:start', {
-      lobbyId,
-      matchKey, // Include matchKey so frontend can use it
-      gameType: lobby.gameType,
-      players: lobby.players,
-      entryAmount: lobby.entryAmount,
-      maxPlayers: lobby.maxPlayers,
-      startTime: Date.now()
-    });
+    if (!player.isBot) {
+      io.to(player.socketId).emit('game:start', {
+        lobbyId,
+        matchKey, // Include matchKey so frontend can use it
+        gameType: lobby.gameType,
+        players: allPlayers, // Include ALL players with isBot flags
+        entryAmount: lobby.entryAmount,
+        maxPlayers: lobby.maxPlayers,
+        startTime: Date.now()
+      });
+      
+      // Also send GAME_START (for BirdMMO clients)
+      io.to(player.socketId).emit('GAME_START', {
+        lobbyId,
+        playerId: player.id,
+        players: allPlayers, // Include ALL players with isBot flags
+        maxPlayers: lobby.maxPlayers,
+        entryFee: lobby.entryAmount || 0,
+        pot: (lobby.entryAmount || 0) * lobby.players.length,
+        roundTimer: 180000
+      });
+    }
   });
 
   // Also broadcast to the lobby room
@@ -785,10 +827,17 @@ function startGame(lobbyId: string) {
     lobbyId,
     matchKey, // Include matchKey so frontend can use it
     gameType: lobby.gameType,
-    players: lobby.players,
+    players: allPlayers, // Include ALL players with isBot flags
     entryAmount: lobby.entryAmount,
     maxPlayers: lobby.maxPlayers,
     startTime: Date.now()
+  });
+  
+  console.log('[MATCHMAKER] 📤 Broadcasted game:start via Socket.IO:', {
+    lobbyId,
+    matchKey,
+    playersCount: allPlayers.length,
+    players: allPlayers.map(p => ({ id: p.id, username: p.username, isBot: p.isBot }))
   });
 
   broadcastLobbyUpdate(lobbyId);
@@ -1185,6 +1234,168 @@ io.on('connection', (socket) => {
     socket.emit('PONG');
   });
 
+  // ===== BIRDMMO SOCKET.IO HANDLERS =====
+  // Handle BirdMMO connection (with matchKey in query)
+  const matchKey = (socket.handshake.query?.matchKey as string) || null;
+  const playerId = (socket.handshake.query?.playerId as string) || null;
+  
+  if (matchKey && playerId) {
+    // This is a BirdMMO game client connecting
+    console.log('[MATCHMAKER] 🎮 BirdMMO client connected:', { matchKey, playerId, socketId: socket.id });
+    
+    const match = matches.get(matchKey);
+    if (match) {
+      // Store socket in match
+      match.sockets.set(playerId, socket as any);
+      
+      // Send socket ID (BirdMMO expects this)
+      socket.emit('id', socket.id);
+      
+      // Send GAME_START with all players (including bots)
+      const lobby = lobbies.get(match.lobbyId);
+      if (lobby && match.gameType === 'sol-bird-race') {
+        const allPlayers = lobby.players.map(p => ({
+          id: p.id,
+          playerId: p.id,
+          socketId: p.socketId,
+          username: p.username || (p.isBot ? 'Bot' : 'Player'),
+          wallet: p.walletAddress,
+          isBot: !!p.isBot
+        }));
+        
+        socket.emit('GAME_START', {
+          lobbyId: match.lobbyId,
+          playerId,
+          players: allPlayers,
+          maxPlayers: lobby.maxPlayers,
+          entryFee: lobby.entryAmount || 0,
+          pot: (lobby.entryAmount || 0) * lobby.players.length,
+          roundTimer: 180000
+        });
+        
+        console.log('[MATCHMAKER] 📤 Sent GAME_START via Socket.IO:', {
+          matchKey,
+          playerId,
+          playersCount: allPlayers.length,
+          players: allPlayers.map(p => ({ id: p.id, username: p.username, isBot: p.isBot }))
+        });
+      }
+      
+      // Initialize BirdMMO position tracking for this match
+      if (!match.birdmmoClients) {
+        match.birdmmoClients = new Map();
+      }
+      match.birdmmoClients.set(socket.id, {
+        playerId,
+        position: { x: -260, y: 1, z: 0 },
+        timestamp: Date.now()
+      });
+      
+      // Broadcast clients every 50ms (BirdMMO format)
+      if (!match.birdmmoBroadcastInterval) {
+        match.birdmmoBroadcastInterval = setInterval(() => {
+          const currentMatch = matches.get(matchKey);
+          if (!currentMatch || !currentMatch.birdmmoClients) return;
+          
+          // Build clients object in BirdMMO format: { socketId: { t: timestamp, p: position } }
+          const clients: Record<string, { t: number; p: { x: number; y: number; z: number } }> = {};
+          currentMatch.birdmmoClients.forEach((data, socketId) => {
+            clients[socketId] = {
+              t: data.timestamp,
+              p: data.position
+            };
+          });
+          
+          // Broadcast to all sockets in this match
+          currentMatch.sockets.forEach((ws) => {
+            if (ws && typeof ws.emit === 'function') {
+              (ws as any).emit('clients', clients);
+            }
+          });
+        }, 50);
+      }
+    }
+    
+    // Handle BirdMMO position updates
+    socket.on('update', (message: { t: number; p: { x: number; y: number; z: number } }) => {
+      if (!matchKey || !match) return;
+      
+      if (match.birdmmoClients) {
+        match.birdmmoClients.set(socket.id, {
+          playerId: playerId || socket.id,
+          position: message.p,
+          timestamp: message.t || Date.now()
+        });
+      }
+    });
+    
+    // Handle BirdMMO player death
+    socket.on('PLAYER_DEATH', (data: { deathReason: string; timestamp?: number }) => {
+      if (!matchKey || !match) return;
+      
+      console.log('[MATCHMAKER] 💀 BirdMMO player death:', { matchKey, playerId, reason: data.deathReason });
+      
+      // Update match state
+      match.playerAlive.set(playerId, false);
+      
+      // Broadcast to other players
+      match.sockets.forEach((ws, pid) => {
+        if (pid !== playerId && ws && typeof ws.emit === 'function') {
+          (ws as any).emit('PLAYER_DEATH', {
+            playerId,
+            deathReason: data.deathReason,
+            timestamp: data.timestamp || Date.now()
+          });
+        }
+      });
+      
+      // Check if match should end (only 1 player alive)
+      const aliveCount = Array.from(match.playerAlive.values()).filter(alive => alive).length;
+      if (aliveCount === 1) {
+        const winnerId = Array.from(match.playerAlive.entries()).find(([_, alive]) => alive)?.[0];
+        if (winnerId) {
+          match.state = 'ended';
+          
+          // Broadcast match end
+          match.sockets.forEach((ws) => {
+            if (ws && typeof ws.emit === 'function') {
+              (ws as any).emit('GAME_END', {
+                winnerId,
+                matchKey
+              });
+            }
+          });
+          
+          // Finalize match
+          finalizeRaceMatch(matchKey);
+        }
+      }
+    });
+    
+    // Handle disconnect - remove from BirdMMO clients
+    socket.on('disconnect', () => {
+      if (matchKey && match) {
+        if (match.birdmmoClients) {
+          match.birdmmoClients.delete(socket.id);
+        }
+        match.sockets.delete(playerId);
+        
+        // Broadcast removal to other players
+        match.sockets.forEach((ws) => {
+          if (ws && typeof ws.emit === 'function') {
+            (ws as any).emit('removeClient', socket.id);
+          }
+        });
+        
+        // Clean up interval if no more clients
+        if (match.birdmmoClients && match.birdmmoClients.size === 0 && match.birdmmoBroadcastInterval) {
+          clearInterval(match.birdmmoBroadcastInterval);
+          match.birdmmoBroadcastInterval = null;
+        }
+      }
+    });
+  }
+
   // Handle playerMove (real-time position updates for Sol-Bird)
   socket.on('playerMove', (data: {
     lobbyId: string;
@@ -1516,6 +1727,9 @@ function findOrCreateLobby(gameType: string, entryTier: number): Lobby {
   }
 
   // Find existing lobby at tier with available slots
+  // Prefer lobbies that already have players (filling up)
+  const availableLobbies: Array<{ lobby: Lobby; priority: number }> = [];
+  
   for (const [lobbyId, lobby] of lobbies.entries()) {
     if (
       lobby.gameType === gameType &&
@@ -1523,9 +1737,22 @@ function findOrCreateLobby(gameType: string, entryTier: number): Lobby {
       lobby.status === 'waiting' &&
       lobby.players.length < lobby.maxPlayers
     ) {
-      logActivity(`🔍 Found existing lobby at tier ${entryTier}`, { lobbyId, currentPlayers: lobby.players.length, maxPlayers: lobby.maxPlayers });
-      return lobby;
+      // Priority: lobbies with more players get higher priority (fill existing lobbies first)
+      const priority = lobby.players.length;
+      availableLobbies.push({ lobby, priority });
     }
+  }
+  
+  // Sort by priority (most players first) and return the best match
+  if (availableLobbies.length > 0) {
+    availableLobbies.sort((a, b) => b.priority - a.priority);
+    const bestLobby = availableLobbies[0].lobby;
+    logActivity(`🔍 Found existing lobby at tier ${entryTier}`, { 
+      lobbyId: bestLobby.id, 
+      currentPlayers: bestLobby.players.length, 
+      maxPlayers: bestLobby.maxPlayers 
+    });
+    return bestLobby;
   }
 
   // Create new lobby at tier
@@ -2353,17 +2580,50 @@ wss.on('connection', (ws: WebSocket & { matchKey?: string; playerId?: string }, 
           const settings = lobby?.settings;
           const roundTimer = 180000; // 3 minutes
 
-          ws.send(
-            JSON.stringify({
-              type: 'GAME_START',
-              lobbyId: match.lobbyId,
-              playerId,
-              maxPlayers: settings?.maxPlayers || lobby?.maxPlayers,
-              entryFee: settings?.entryFee ?? lobby?.entryAmount ?? 0,
-              pot: settings?.pot ?? (lobby?.entryAmount || 0) * (lobby?.maxPlayers || match.players.length),
-              roundTimer,
-            })
-          );
+          const lobbyPlayers = lobby?.players ?? [];
+
+          // Keep match players in sync with latest lobby state (bots + real players)
+          if (!match.players || match.players.length !== lobbyPlayers.length) {
+            match.players = (lobbyPlayers.length ? lobbyPlayers : match.players).map(p => ({
+              playerId: p.id || p.playerId,
+              socketId: p.socketId || '',
+              wallet: p.walletAddress || p.wallet,
+              username: p.username || (p.isBot ? 'Bot' : 'Player'),
+              isBot: !!p.isBot
+            }));
+          }
+
+          const sourcePlayers = lobbyPlayers.length ? lobbyPlayers : match.players;
+
+          // Include all players (including bots) in GAME_START
+          const allPlayers = sourcePlayers.map(p => ({
+            id: p.id || p.playerId,
+            playerId: p.id || p.playerId,
+            socketId: p.socketId,
+            username: p.username || (p.isBot ? 'Bot' : 'Player'),
+            wallet: p.walletAddress || p.wallet,
+            isBot: !!p.isBot
+          }));
+
+          const gameStartPayload = {
+            type: 'GAME_START',
+            lobbyId: match.lobbyId,
+            playerId,
+            players: allPlayers, // Include all players including bots
+            maxPlayers: settings?.maxPlayers || lobby?.maxPlayers,
+            entryFee: settings?.entryFee ?? lobby?.entryAmount ?? 0,
+            pot: settings?.pot ?? (lobby?.entryAmount || 0) * (lobby?.maxPlayers || match.players.length),
+            roundTimer,
+          };
+          
+          console.log('[MATCHMAKER] 📤 Sending GAME_START via WebSocket:', {
+            matchKey,
+            playerId,
+            playersCount: allPlayers.length,
+            players: allPlayers.map(p => ({ id: p.id, username: p.username, isBot: p.isBot }))
+          });
+          
+          ws.send(JSON.stringify(gameStartPayload));
 
           // Ensure timer is scheduled once
           if (match.roundEndsAt && match.roundEndsAt > Date.now()) {

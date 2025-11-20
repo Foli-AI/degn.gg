@@ -1,11 +1,23 @@
+"use client";
+
 import { Navbar } from "@/components/navbar";
 import { GameGrid } from "@/components/game-grid";
 import { ActivityFeed } from "@/components/activity-feed";
 import { LeaderboardPreview } from "@/components/leaderboard-preview";
 import { Footer } from "@/components/Footer";
 import { Starfield } from "@/components/starfield";
+import { WaitingModal } from "@/components/lobby/WaitingModal";
+import { useMatchmaker } from "@/hooks/useMatchmaker";
 
 export default function LobbyPage() {
+  const { 
+    showWaitingModal, 
+    waitingModalPlayers, 
+    waitingModalMaxPlayers, 
+    waitingModalEntryAmount,
+    closeWaitingModal 
+  } = useMatchmaker();
+
   return (
     <div className="min-h-screen relative overflow-hidden">
       <Starfield />
@@ -38,6 +50,15 @@ export default function LobbyPage() {
 
         <Footer />
       </div>
+
+      {/* Waiting Modal */}
+      <WaitingModal
+        isOpen={showWaitingModal}
+        currentPlayers={waitingModalPlayers}
+        maxPlayers={waitingModalMaxPlayers}
+        entryAmount={waitingModalEntryAmount}
+        onClose={closeWaitingModal}
+      />
     </div>
   );
 }

@@ -24,7 +24,7 @@ const BET_OPTIONS = [0.05, 0.1, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0
 export function GameRoomCard({ room }: { room: GameRoom }) {
   const [selectedBet, setSelectedBet] = useState<number>(room.entryBet);
   const [isJoining, setIsJoining] = useState(false);
-  const { findAndJoinBestMatch, connect, connected } = useMatchmaker();
+  const { findAndJoinBestMatch, connect, connected, status: matchmakerStatus } = useMatchmaker();
   const { connected: walletConnected } = useWallet();
   const router = useRouter();
 
@@ -49,19 +49,24 @@ export function GameRoomCard({ room }: { room: GameRoom }) {
     setIsJoining(true);
     try {
       // Ensure connected to matchmaker
-      if (!connected) {
-        await connect();
-        // Wait a bit for connection
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (!connected || matchmakerStatus === 'disconnected') {
+        console.log('[GameRoomCard] Connecting to matchmaker...');
+        connect();
+        // Wait for connection and player:join to complete
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
       const gameType = getGameType(room.title) as any;
-      await findAndJoinBestMatch({
+      console.log('[GameRoomCard] Finding/joining match...', { gameType, entryAmount: selectedBet });
+      const result = await findAndJoinBestMatch({
         gameType,
         entryAmount: selectedBet,
       });
       
-      // The hook will handle navigation to the game page
+      console.log('[GameRoomCard] ✅ Match found/joined:', result);
+      console.log('[GameRoomCard] Waiting for game:start event...');
+      console.log('[GameRoomCard] Current status:', matchmakerStatus);
+      // The hook will handle navigation to the game page via game:start event
     } catch (error) {
       console.error("Failed to join game:", error);
       alert(error instanceof Error ? error.message : "Failed to join game. Make sure the backend is running.");

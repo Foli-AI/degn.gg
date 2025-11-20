@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Transaction } from '@solana/web3.js';
 import { socket, socketEvents, Lobby, LobbyListItem, Player } from '@/lib/socket';
@@ -72,6 +72,10 @@ interface UseMatchmakerState {
   status: 'disconnected' | 'connecting' | 'connected' | 'in-lobby' | 'in-game';
   error: string | null;
   isLoading: boolean;
+  showWaitingModal: boolean;
+  waitingModalPlayers: number;
+  waitingModalMaxPlayers: number;
+  waitingModalEntryAmount: number;
 }
 
 export function useMatchmaker() {
@@ -83,8 +87,20 @@ export function useMatchmaker() {
     currentLobby: null,
     status: 'disconnected',
     error: null,
-    isLoading: false
+    isLoading: false,
+    showWaitingModal: false,
+    waitingModalPlayers: 0,
+    waitingModalMaxPlayers: 8,
+    waitingModalEntryAmount: 0
   });
+
+  // Ref to track latest playerId for use in event handlers
+  const playerIdRef = useRef<string | null>(null);
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    playerIdRef.current = state.playerId;
+  }, [state.playerId]);
 
   // Mock wallet helper - memoized to avoid dependency issues
   const getMockWallet = useCallback(() => {
@@ -290,6 +306,48 @@ export function useMatchmaker() {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
+      // Ensure player has joined matchmaker first
+      if (!socket || !socket.connected) {
+        console.log('[useMatchmaker] Socket not connected, connecting first...');
+        await new Promise<void>((resolve, reject) => {
+          if (!socket) {
+            reject(new Error('Socket not initialized'));
+            return;
+          }
+          
+          socket.connect();
+          
+          const onConnect = () => {
+            socket?.off('connect', onConnect);
+            socket?.off('connect_error', onError);
+            resolve();
+          };
+          
+          const onError = (error: any) => {
+            socket?.off('connect', onConnect);
+            socket?.off('connect_error', onError);
+            reject(new Error('Failed to connect to matchmaker'));
+          };
+          
+          socket.once('connect', onConnect);
+          socket.once('connect_error', onError);
+          
+          setTimeout(() => {
+            socket?.off('connect', onConnect);
+            socket?.off('connect_error', onError);
+            reject(new Error('Connection timeout'));
+          }, 10000);
+        });
+      }
+      
+      // Ensure player has joined matchmaker (sent player:join)
+      if (state.status === 'disconnected' || state.status === 'connecting') {
+        console.log('[useMatchmaker] Player not in matchmaker, joining...');
+        connect();
+        // Wait a bit for player:join to complete
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
       // Get lobby details to check entry amount
       const lobby = state.lobbies.find(l => l.id === lobbyId);
       if (!lobby) {
@@ -362,7 +420,7 @@ export function useMatchmaker() {
       setState(prev => ({ ...prev, error: errorMessage, isLoading: false }));
       throw error;
     }
-  }, [connected, publicKey, signTransaction, state.lobbies]);
+  }, [connected, publicKey, signTransaction, state.lobbies, state.status, connect]);
 
   // Find and join best match
   const findAndJoinBestMatch = useCallback(async ({ 
@@ -419,6 +477,7 @@ export function useMatchmaker() {
     };
 
     const handleLobbyJoined = (data: any) => {
+      const playerCount = data.players?.length || 0;
       setState(prev => ({ 
         ...prev, 
         status: 'in-lobby',
@@ -431,7 +490,11 @@ export function useMatchmaker() {
           createdAt: new Date(),
           createdBy: 'unknown',
           entryAmount: data.entryAmount
-        }
+        },
+        showWaitingModal: true,
+        waitingModalPlayers: playerCount,
+        waitingModalMaxPlayers: data.maxPlayers || 8,
+        waitingModalEntryAmount: data.entryAmount || 0
       }));
     };
 
@@ -451,6 +514,8 @@ export function useMatchmaker() {
       maxPlayers: number;
       startTime: number;
     }) => {
+      console.log('[useMatchmaker] 📨 Received game:start event:', data);
+      
       // Prevent multiple redirects
       if (redirectGuardRef.current) {
         console.log('⚠️ Already redirecting, ignoring duplicate game-start event');
@@ -463,7 +528,11 @@ export function useMatchmaker() {
         return;
       }
       
-      setState(prev => ({ ...prev, status: 'in-game' }));
+      setState(prev => ({ 
+        ...prev, 
+        status: 'in-game',
+        showWaitingModal: false // Close waiting modal when game starts
+      }));
       
       console.log('🎮 Game starting! Redirecting to game...', data);
       
@@ -485,16 +554,37 @@ export function useMatchmaker() {
         // Build query params
         // Use matchKey from backend if provided, otherwise fallback to lobbyId
         const matchKey = (data as any).matchKey || data.lobbyId;
+        
+        // Find current player's ID from socket or ref (to avoid dependency issues)
+        const currentPlayerId = playerIdRef.current || data.players.find(p => p.id === socket?.id)?.id || data.players[0]?.id || '';
+        const currentPlayer = data.players.find(p => p.id === currentPlayerId || p.socketId === socket?.id) || data.players[0];
+        
+        // Get Socket.IO URL (HTTP/HTTPS, not WebSocket)
+        const getSocketIOUrl = () => {
+          const envUrl = process.env.NEXT_PUBLIC_MATCHMAKER_URL;
+          if (envUrl) return envUrl;
+          
+          // Fallback for production
+          if (typeof window !== 'undefined' && window.location.hostname === 'degn-gg.vercel.app') {
+            return 'https://degn-gg-1.onrender.com';
+          }
+          
+          return 'http://localhost:3001';
+        };
+        
         const params = new URLSearchParams({
           lobbyId: data.lobbyId,
-          playerId: data.players.find(p => p.id === socket?.id)?.id || data.players[0]?.id || '',
-          username: data.players.find(p => p.id === socket?.id)?.username || data.players[0]?.username || 'Player',
+          playerId: currentPlayerId,
+          username: currentPlayer?.username || 'Player',
           entry: String(data.entryAmount || 0),
           players: String(data.players.length),
-          matchKey: matchKey // Use matchKey from backend event
+          matchKey: matchKey, // Use matchKey from backend event
+          wsUrl: getSocketIOUrl() // Socket.IO URL (HTTP/HTTPS)
         });
         
         const url = `${route}?${params.toString()}`;
+        
+        console.log('[useMatchmaker] 🚀 Redirecting to game:', url);
         
         // Always use same-window navigation (no new tabs)
         // Small delay to ensure state is updated
@@ -505,10 +595,15 @@ export function useMatchmaker() {
     };
 
     const handleLobbyUpdate = (lobby: Lobby) => {
-      setState(prev => ({ 
-        ...prev, 
-        currentLobby: prev.currentLobby?.id === lobby.id ? lobby : prev.currentLobby 
-      }));
+      setState(prev => {
+        const isCurrentLobby = prev.currentLobby?.id === lobby.id;
+        return {
+          ...prev, 
+          currentLobby: isCurrentLobby ? lobby : prev.currentLobby,
+          // Update waiting modal if it's the current lobby
+          waitingModalPlayers: isCurrentLobby ? lobby.players.length : prev.waitingModalPlayers
+        };
+      });
     };
 
     const handleLobbyListUpdate = (lobbies: LobbyListItem[]) => {
@@ -606,6 +701,13 @@ export function useMatchmaker() {
     joinLobbyWithPayment,
     findAndJoinBestMatch,
     getMockWallet,
-    gameConfig: GAME_CONFIG
+    gameConfig: GAME_CONFIG,
+    // Waiting modal state
+    showWaitingModal: state.showWaitingModal,
+    waitingModalPlayers: state.waitingModalPlayers,
+    waitingModalMaxPlayers: state.waitingModalMaxPlayers,
+    waitingModalEntryAmount: state.waitingModalEntryAmount,
+    // Helper to close modal
+    closeWaitingModal: () => setState(prev => ({ ...prev, showWaitingModal: false }))
   };
 }

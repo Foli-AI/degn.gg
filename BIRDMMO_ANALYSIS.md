@@ -562,3 +562,4 @@ const potSize = entryAmount * players.length;
 
 **Recommendation:** Find a simple HTML5 Flappy Bird clone and integrate it with DEGN.gg's existing WebSocket infrastructure. This will be faster, simpler, and more maintainable than BirdMMO.
 
+

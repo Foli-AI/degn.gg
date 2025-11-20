@@ -10,7 +10,20 @@ function SolBirdPageContent() {
   const lobbyId = sp.get('lobbyId') ?? sp.get('matchKey') ?? '';
   const playerId = sp.get('playerId') ?? '';
   const username = sp.get('username') ?? '';
-  const wsUrl = sp.get('wsUrl') ?? (process.env.NEXT_PUBLIC_MATCHMAKER_URL ? `${process.env.NEXT_PUBLIC_MATCHMAKER_URL.replace(/^http/, 'ws')}/ws` : '');
+  // For Socket.IO, use HTTP/HTTPS URL (not WebSocket)
+  const getSocketIOUrl = () => {
+    const envUrl = process.env.NEXT_PUBLIC_MATCHMAKER_URL;
+    if (envUrl) return envUrl;
+    
+    // Fallback for production
+    if (typeof window !== 'undefined' && window.location.hostname === 'degn-gg.vercel.app') {
+      return 'https://degn-gg-1.onrender.com';
+    }
+    
+    return 'http://localhost:3001';
+  };
+  
+  const wsUrl = sp.get('wsUrl') ?? getSocketIOUrl();
   const entry = sp.get('entry') ?? sp.get('entryFee') ?? '0';
   const players = sp.get('players') ?? sp.get('maxPlayers') ?? '2';
   const matchKey = sp.get('matchKey') ?? `lobby_${lobbyId}_${playerId}`;

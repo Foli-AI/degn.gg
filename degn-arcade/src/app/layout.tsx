@@ -64,8 +64,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}>
       <head>
-        {/* TODO: Remove mock wallet script in production */}
-        <script src="/mock-wallet.js" defer></script>
       </head>
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">
         <SolanaWalletProvider>

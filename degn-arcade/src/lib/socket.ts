@@ -9,12 +9,17 @@ const getMatchmakerUrl = () => {
   
   // Client-side fallback: construct from current host
   if (typeof window !== 'undefined') {
-    const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+    const hostname = window.location.hostname;
+    // Hard fallback for production host if env var missing
+    if (hostname === 'degn-gg.vercel.app') {
+      return 'https://degn-gg-1.onrender.com';
+    }
+    const isProduction = hostname !== 'localhost' && hostname !== '127.0.0.1';
     if (isProduction) {
       // Production: try to construct matchmaker URL from current host
       // This is a fallback - should always use NEXT_PUBLIC_MATCHMAKER_URL in production
       console.warn('[Socket] No NEXT_PUBLIC_MATCHMAKER_URL set, using fallback');
-      return `https://matchmaker.${window.location.hostname}`;
+      return `https://matchmaker.${hostname}`;
     }
   }
   return "http://localhost:3001";
@@ -32,6 +37,12 @@ if (typeof window !== 'undefined') {
     : MATCHMAKER_URL.startsWith('http://')
     ? MATCHMAKER_URL
     : `https://${MATCHMAKER_URL}`;
+
+  if (!process.env.NEXT_PUBLIC_MATCHMAKER_URL) {
+    console.warn('[Socket] NEXT_PUBLIC_MATCHMAKER_URL is not set. Using fallback URL:', socketUrl);
+  } else {
+    console.log('[Socket] Using matchmaker URL from env:', socketUrl);
+  }
   
   // First, test if backend is reachable via HTTP
   const testBackendHealth = async () => {
