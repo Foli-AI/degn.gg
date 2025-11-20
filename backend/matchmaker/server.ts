@@ -1330,6 +1330,92 @@ io.on('connection', (socket) => {
     });
     
     // Handle BirdMMO player death
+    // Handle MATCH_RESULT from BirdMMO (last-man-standing winner)
+    socket.on('MATCH_RESULT', async (data: { winner: string; rankings: Array<{ playerId: string; position: number }>; timestamp?: number }) => {
+      if (!matchKey || !match) return;
+      
+      const { winner, rankings } = data;
+      const lobby = lobbies.get(match.lobbyId);
+      
+      if (!lobby) {
+        console.error('[MATCHMAKER] Lobby not found for MATCH_RESULT:', match.lobbyId);
+        return;
+      }
+
+      console.log('[MATCHMAKER] 🏆 MATCH_RESULT received (last-man-standing):', { matchKey, winner, rankings });
+
+      // Last-man-standing: Winner takes 90%, house takes 10%
+      const entryAmount = lobby.entryTier || lobby.entryAmount || 0;
+      const totalPot = entryAmount * lobby.players.length;
+      const houseRake = totalPot * 0.10; // 10% rake
+      const winnerPayout = totalPot - houseRake; // Winner gets 90%
+
+      logActivity(`💰 Finalizing last-man-standing match payout`, {
+        matchKey,
+        lobbyId: match.lobbyId,
+        totalPot,
+        houseRake,
+        winnerPayout,
+        winner,
+        entryAmount,
+        playerCount: lobby.players.length
+      });
+
+      // Find winner player
+      const winnerPlayer = lobby.players.find(p => p.id === winner);
+      
+      if (!winnerPlayer) {
+        console.error(`[MATCHMAKER] Winner player not found: ${winner}`);
+        return;
+      }
+
+      // Payout winner (90% of pot)
+      if (winnerPlayer.walletAddress && winnerPayout > 0 && !winnerPlayer.isBot) {
+        try {
+          // TODO: Implement actual Solana payout
+          console.log(`[PAYOUT] Winner ${winnerPlayer.username} (${winnerPlayer.walletAddress}) receives ${winnerPayout} SOL`);
+        } catch (error) {
+          console.error(`[PAYOUT] Error paying winner:`, error);
+        }
+      } else if (winnerPlayer.isBot) {
+        // Bot wins - send to bot wallet (house keeps it)
+        fundBotWallet(winnerPayout);
+        logActivity(`🤖 Bot won - payout to bot wallet`, {
+          botId: winner,
+          amount: winnerPayout
+        });
+      }
+
+      // Send game over to all players
+      lobby.players.forEach(player => {
+        if (!player.isBot) {
+          io.to(player.socketId).emit('gameOver', {
+            matchKey,
+            lobbyId: match.lobbyId,
+            winner: {
+              playerId: winner,
+              username: winnerPlayer.username,
+              payout: winnerPayout
+            },
+            rankings,
+            pot: totalPot,
+            houseRake,
+            timestamp: Date.now()
+          });
+        }
+      });
+
+      // Clean up
+      match.state = 'ended';
+      lobby.status = 'cancelled';
+      
+      logActivity(`✅ Last-man-standing match finalized`, {
+        matchKey,
+        winner,
+        payout: winnerPayout
+      });
+    });
+
     socket.on('PLAYER_DEATH', (data: { deathReason: string; timestamp?: number }) => {
       if (!matchKey || !match) return;
       
