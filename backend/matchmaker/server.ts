@@ -95,9 +95,9 @@ const GAME_CONFIG = {
 } as const;
 
 // ✅ Bot system configuration
-// DISABLED: Set enabled to true to enable bots
+// Bot system configuration
 const BOT_CONFIG = {
-  enabled: false, // Master switch - set to false for real players only
+  enabled: true, // Master switch - set to false for real players only
   maxEntryFee: 0.5, // SOL - bots only join ≤ 0.5 SOL lobbies
   fillWaitTime: 30000, // 30 seconds - wait before adding bots
   winRates: {
