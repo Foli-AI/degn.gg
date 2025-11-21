@@ -1,0 +1,131 @@
+import { useMemo, useRef, useState, forwardRef, useEffect } from 'react'
+import { useGLTF } from '@react-three/drei'
+import { useFrame } from '@react-three/fiber'
+import useKeyboard from './useKeyboard'
+import { MathUtils, Vector3 } from 'three'
+import Bird from './Bird'
+import Overlay from './Overlay'
+import Network from './Network'
+
+const OtherBirds = forwardRef(function OtherBirds(_, ref) {
+  return (
+    <>
+      <group ref={ref[0]} position={[-260, -10, 0]}>
+        <Bird color="red" />
+      </group>
+      <group ref={ref[1]} position={[-260, -10, 0]}>
+        <Bird color="blue" />
+      </group>
+      <group ref={ref[2]} position={[-260, -10, 0]}>
+        <Bird color="yellow" />
+      </group>
+    </>
+  )
+})
+
+const GRAVITY = 50
+
+export default function Player({ colliders, isAlive = true, onDeath }) {
+  const model = useRef()
+  const keyMap = useKeyboard(isAlive)
+  const velocity = useMemo(() => new Vector3(), [])
+  const lookAt = useMemo(() => new Vector3(), [])
+  const startPosition = useMemo(() => new Vector3(-260, 1, 0), [])
+  const [crashed, setCrashed] = useState(false)
+  const [started, setStarted] = useState(false)
+  const otherBirds = [useRef(), useRef(), useRef()]
+
+  // Freeze physics when dead
+  useEffect(() => {
+    if (!isAlive) {
+      setCrashed(true);
+      velocity.set(0, 0, 0);
+    }
+  }, [isAlive, velocity]);
+
+  useFrame((state, delta) => {
+    // Block all input and movement when dead
+    if (!isAlive || crashed) {
+      return;
+    }
+
+    keyMap['Space'] && (velocity.y = 10) && setStarted(true)
+
+    let damping = Math.exp(-4 * delta) - 1
+    if (model.current.position.y > 0.65) {
+      velocity.x += delta * 2
+      velocity.y -= GRAVITY * delta
+      damping *= 0.066 // affects speed up
+    } else {
+      model.current.position.y = 0.65
+      velocity.x = 0
+    }
+    velocity.addScaledVector(velocity, damping)
+    const deltaPosition = velocity.clone().multiplyScalar(delta)
+    model.current.position.add(deltaPosition)
+
+    model.current.rotation.z = (velocity.y / 180) * Math.PI * 2
+
+    state.camera.position.y = MathUtils.lerp(state.camera.position.y, model.current.position.y, 0.1)
+    state.camera.position.y < 1 && (state.camera.position.y = 1)
+    state.camera.position.x = MathUtils.lerp(state.camera.position.x, model.current.position.x, 0.1)
+
+    lookAt.lerp(model.current.position, 0.1)
+    lookAt.x += 0.1
+    state.camera.lookAt(lookAt)
+
+    const nextPipeID = Math.floor((model.current.position.x - 5) / 10 + 26) //only checking nearest pipe
+    for (let i = 0; i < 2; i++) {
+      if (!crashed && nextPipeID > -1) {
+        const pipeCollider = colliders['collider' + i + '_' + nextPipeID]
+        const positions = pipeCollider.geometry.attributes.position.array
+        for (let j = 0; j < positions.length; j += 3) {
+          const v = new Vector3(positions[j], positions[j + 1], positions[j + 2])
+          const globalVertex = v.applyMatrix4(pipeCollider.matrixWorld)
+          if (globalVertex.distanceTo(model.current.position) < 0.75) {
+            // Collision detected - player died
+            setCrashed(true);
+            Network.sendPlayerDeath('collision');
+            if (onDeath) {
+              onDeath('collision');
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    // Out of bounds - player died
+    if (model.current.position.y > 20) {
+      setCrashed(true);
+      Network.sendPlayerDeath('out_of_bounds');
+      if (onDeath) {
+        onDeath('out_of_bounds');
+      }
+      return;
+    }
+
+    // Ground collision - player died
+    if (model.current.position.y <= 0.65 && velocity.y < 0) {
+      setCrashed(true);
+      Network.sendPlayerDeath('ground');
+      if (onDeath) {
+        onDeath('ground');
+      }
+      return;
+    }
+  })
+
+  return (
+    <>
+      <group ref={model} dispose={null} position={startPosition}>
+        <Bird crashed={crashed} />
+      </group>
+      <Overlay model={model} crashed={crashed} started={started} keyMap={keyMap} isAlive={isAlive} />
+      <OtherBirds ref={otherBirds} />
+    </>
+  )
+}
+
+useGLTF.preload('./models/bird.glb')
+
