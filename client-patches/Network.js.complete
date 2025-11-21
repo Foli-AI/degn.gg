@@ -1,0 +1,235 @@
+/**
+ * Network.js - Complete Replacement
+ * 
+ * Replace the entire contents of src/client/Network.js with this file.
+ * 
+ * This implements token-based Socket.IO authentication and DEGN.gg event handling.
+ * 
+ * Location in BirdMMO repo: src/client/Network.js
+ */
+
+import { io } from 'socket.io-client';
+
+// Get AUTH_TOKEN from parent window (Next.js iframe) or query string
+let AUTH_TOKEN = null;
+
+// Listen for token from parent window
+if (typeof window !== 'undefined') {
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SOCKET_TOKEN') {
+      AUTH_TOKEN = event.data.token;
+      console.log('[Network] ✅ Received auth token from parent window');
+    }
+  });
+
+  // Also check query string as fallback
+  const params = new URLSearchParams(window.location.search);
+  AUTH_TOKEN = AUTH_TOKEN || params.get('token') || null;
+  if (AUTH_TOKEN && !AUTH_TOKEN.includes('SOCKET_TOKEN')) {
+    console.log('[Network] ✅ Found auth token in query string');
+  }
+}
+
+// Socket.IO server URL (set via environment variable)
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 
+                   process.env.NEXT_PUBLIC_SOCKET_URL || 
+                   'https://sockets.degn.gg';
+
+class DEGNNetwork {
+  constructor() {
+    this.socket = null;
+    this.eventHandlers = new Map();
+    this.matchKey = '';
+    this.playerId = '';
+    this.username = '';
+    this.connected = false;
+    this.restartAllowed = false;
+  }
+
+  connect(matchKey, playerId, username, wsUrl) {
+    return new Promise((resolve, reject) => {
+      this.matchKey = matchKey;
+      this.playerId = playerId;
+      this.username = username;
+
+      // Wait for token if not available yet
+      if (!AUTH_TOKEN) {
+        console.warn('[Network] ⚠️ No auth token available, waiting...');
+        // Wait up to 5 seconds for token
+        let attempts = 0;
+        const checkToken = setInterval(() => {
+          attempts++;
+          if (AUTH_TOKEN || attempts >= 50) {
+            clearInterval(checkToken);
+            if (!AUTH_TOKEN) {
+              return reject(new Error('Auth token not received'));
+            }
+            this._doConnect(resolve, reject);
+          }
+        }, 100);
+        return;
+      }
+
+      this._doConnect(resolve, reject);
+    });
+  }
+
+  _doConnect(resolve, reject) {
+    console.log('[Network] 🔌 Connecting to Socket.IO server:', SOCKET_URL);
+
+    this.socket = io(SOCKET_URL, {
+      path: '/socket.io',
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+      timeout: 20000,
+      auth: {
+        token: AUTH_TOKEN
+      }
+    });
+
+    this.socket.on('connect', () => {
+      console.log('[Network] ✅ Socket.IO connected:', this.socket.id);
+      this.connected = true;
+      resolve();
+    });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('[Network] ❌ Socket.IO connection error:', error);
+      this.connected = false;
+      reject(error);
+    });
+
+    this.socket.on('disconnect', (reason) => {
+      console.log('[Network] 🔌 Socket.IO disconnected:', reason);
+      this.connected = false;
+    });
+
+    // Lobby events
+    this.socket.on('lobby_update', (data) => {
+      console.log('[Network] Lobby update:', data);
+      this.emit('lobby:update', data);
+    });
+
+    this.socket.on('lobby_ready', (data) => {
+      console.log('[Network] Lobby ready, countdown:', data.countdown);
+      this.emit('lobby:ready', data);
+    });
+
+    // Match events
+    this.socket.on('match_start', (data) => {
+      console.log('[Network] Match started:', data);
+      this.emit('game:start', data);
+    });
+
+    this.socket.on('player_update', (data) => {
+      console.log('[Network] Player update:', data);
+      this.emit('player:update', data);
+    });
+
+    this.socket.on('player_position', (data) => {
+      this.emit('player:position', data);
+    });
+
+    this.socket.on('match_end', (data) => {
+      console.log('[Network] Match ended:', data);
+      this.restartAllowed = true;
+      this.emit('game:end', data);
+    });
+
+    this.socket.on('winner_payout', (data) => {
+      console.log('[Network] Winner payout:', data);
+      this.emit('winner:payout', data);
+    });
+  }
+
+  // Send player death to server
+  sendPlayerDeath(deathReason) {
+    if (!this.socket || !this.connected) {
+      console.warn('[Network] Cannot send - Socket.IO not connected');
+      return;
+    }
+
+    this.socket.emit('player_death', {
+      userId: this.playerId,
+      lobbyId: this.matchKey,
+      ts: Date.now()
+    });
+  }
+
+  // Send player position update
+  sendPlayerState(position, velocity) {
+    if (!this.socket || !this.connected) {
+      console.warn('[Network] Cannot send - Socket.IO not connected');
+      return;
+    }
+
+    this.socket.emit('player_position', {
+      position: {
+        x: position.x || 0,
+        y: position.y || 0,
+        z: position.z || 0
+      }
+    });
+  }
+
+  // Generic send method (for compatibility)
+  send(type, data) {
+    if (!this.socket || !this.connected) {
+      console.warn('[Network] Cannot send - Socket.IO not connected');
+      return;
+    }
+
+    this.socket.emit(type, {
+      matchKey: this.matchKey,
+      playerId: this.playerId,
+      ...data
+    });
+  }
+
+  // Event emitter pattern
+  on(event, callback) {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, []);
+    }
+    this.eventHandlers.get(event).push(callback);
+  }
+
+  off(event, callback) {
+    const handlers = this.eventHandlers.get(event);
+    if (handlers) {
+      const index = handlers.indexOf(callback);
+      if (index > -1) {
+        handlers.splice(index, 1);
+      }
+    }
+  }
+
+  emit(event, data) {
+    const handlers = this.eventHandlers.get(event);
+    if (handlers) {
+      handlers.forEach(callback => {
+        try {
+          callback(data);
+        } catch (error) {
+          console.error(`[Network] Error in event handler for ${event}:`, error);
+        }
+      });
+    }
+  }
+
+  disconnect() {
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+    this.connected = false;
+    this.eventHandlers.clear();
+  }
+}
+
+// Export singleton instance
+const network = new DEGNNetwork();
+export default network;
+
