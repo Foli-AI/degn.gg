@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "build:birdmmo": "node scripts/build-birdmmo.cjs",
+    "prebuild": "npm run build:birdmmo",
     "build": "next build",
     "postbuild": "node scripts/patch-sol-bird-index.cjs",
     "start": "next start",
