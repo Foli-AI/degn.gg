@@ -57,7 +57,6 @@ Hybrid Solana-powered casino and multiplayer arcade platform built with Next.js 
 npm install
 npm run dev
 ```
-
 Open http://localhost:3000 to view the neon MVP shell.
 
 ## Project Roadmap
@@ -101,3 +100,4 @@ NEXT_PUBLIC_SOLANA_RPC=
 
 
 
+force rebuild 1
