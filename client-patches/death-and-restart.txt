@@ -1,0 +1,172 @@
+# PATCH: Disable Restart Logic and Handle Death Properly
+# 
+# Files to patch in BirdMMO repo:
+# - src/client/Player.jsx (death handling)
+# - src/client/Game.jsx (restart logic)
+# - src/client/useKeyboard.jsx (disable 'R' key)
+# - src/client/App.jsx or index.jsx (restart button)
+
+# ============================================
+# PATCH 1: Player.jsx - Death Handling
+# ============================================
+
+# Search for: setCrashed(true) or setIsAlive(false) or onDeath()
+
+# In Player.jsx, find the death detection code (collision, out of bounds, ground):
+# 
+# REPLACE this pattern:
+#   if (collision) {
+#     setCrashed(true);
+#     // OLD: setIsAlive(false) or restart logic
+#   }
+
+# WITH:
+#   if (collision && isAlive) {
+#     setCrashed(true);
+#     // Notify parent immediately
+#     onDeath(playerId, deathReason);
+#     // Send to server
+#     sendPlayerDeath(deathReason);
+#     // DO NOT call setIsAlive(false) here - parent controls isAlive
+#   }
+
+# Also add this useEffect to disable input when dead:
+# useEffect(() => {
+#   if (!isAlive) {
+#     // Disable all movement
+#     setCrashed(true);
+#     // Clear velocity
+#     if (model.current) {
+#       velocity.set(0, 0, 0);
+#     }
+#   }
+# }, [isAlive]);
+
+# ============================================
+# PATCH 2: useKeyboard.jsx - Block 'R' Key
+# ============================================
+
+# Find the keyboard event handler and add:
+
+# const onDocumentKey = (e) => {
+#   // BLOCK 'r' KEY COMPLETELY (restart/respawn)
+#   if (e.key === 'r' || e.key === 'R' || e.code === 'KeyR') {
+#     e.preventDefault();
+#     e.stopPropagation();
+#     console.warn('[Keyboard] Restart blocked - wait for match_end');
+#     return;
+#   }
+#   
+#   // Also disable all input if dead
+#   if (!isAlive) {
+#     return;
+#   }
+#   
+#   // ... rest of keyboard handling
+# };
+
+# ============================================
+# PATCH 3: Game.jsx - Disable Restart Until match_end
+# ============================================
+
+# Add state variable:
+# const [restartAllowed, setRestartAllowed] = useState(false);
+
+# Add socket listener for match_end:
+# useEffect(() => {
+#   if (!network || !network.socket) return;
+#   
+#   const handleMatchEnd = (data) => {
+#     console.log('[Game] Match ended, restart now allowed');
+#     setRestartAllowed(true);
+#     // Show "Play Again" button or redirect
+#   };
+#   
+#   network.on('game:end', handleMatchEnd);
+#   
+#   return () => {
+#     network.off('game:end', handleMatchEnd);
+#   };
+# }, [network]);
+
+# Find any restart/respawn button or logic and gate it:
+# 
+# OLD:
+#   <button onClick={() => window.location.reload()}>Restart</button>
+# 
+# NEW:
+#   {restartAllowed && (
+#     <button onClick={() => window.location.reload()}>Play Again</button>
+#   )}
+
+# Also block any automatic restart:
+# 
+# OLD:
+#   if (crashed) {
+#     setTimeout(() => window.location.reload(), 2000);
+#   }
+# 
+# NEW:
+#   if (crashed && !isAlive) {
+#     // Show "ELIMINATED" overlay, but don't restart
+#     // Wait for match_end event
+#   }
+
+# ============================================
+# PATCH 4: App.jsx or Overlay.jsx - Restart Button
+# ============================================
+
+# Search for: "Restart", "Respawn", "Play Again", window.location.reload()
+
+# Replace with:
+# 
+# const [canRestart, setCanRestart] = useState(false);
+# 
+# // Listen for match_end
+# useEffect(() => {
+#   const handleMatchEnd = () => {
+#     setCanRestart(true);
+#   };
+#   
+#   // Subscribe to network event
+#   network?.on('game:end', handleMatchEnd);
+#   
+#   return () => {
+#     network?.off('game:end', handleMatchEnd);
+#   };
+# }, [network]);
+# 
+# // In render:
+# {canRestart ? (
+#   <button onClick={() => window.location.reload()}>
+#     Play Again
+#   </button>
+# ) : (
+#   <div>ELIMINATED - Waiting for match to end...</div>
+# )}
+
+# ============================================
+# PATCH 5: Block window.location.reload() globally
+# ============================================
+
+# Add to App.jsx or index.jsx (top of file):
+# 
+# // Block automatic reloads during match
+# let matchActive = true;
+# 
+# const originalReload = window.location.reload;
+# window.location.reload = function(forcedReload) {
+#   if (matchActive && !forcedReload) {
+#     console.warn('[App] Reload blocked - match in progress');
+#     return;
+#   }
+#   return originalReload.call(window.location);
+# };
+# 
+# // Allow reload after match_end
+# window.addEventListener('message', (event) => {
+#   if (event.data.type === 'MATCH_END') {
+#     matchActive = false;
+#   }
+# });
+
