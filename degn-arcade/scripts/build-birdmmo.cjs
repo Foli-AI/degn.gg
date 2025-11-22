@@ -50,6 +50,12 @@ try {
   
   // Build the client
   console.log('[BUILD] 🔨 Running webpack build...');
+  try {
+    const webpackPath = require.resolve("webpack");
+    console.log('[BUILD] Using local webpack:', webpackPath);
+  } catch (error) {
+    console.warn('[BUILD] ⚠️ Could not resolve local webpack:', error.message);
+  }
   execSync('npm run build', { stdio: 'inherit' });
   
   // Verify build output
